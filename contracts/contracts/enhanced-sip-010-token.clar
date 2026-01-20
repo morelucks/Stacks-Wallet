@@ -274,3 +274,36 @@
     (var-set token-uri new-uri)
     (var-set metadata-update-event {field: "uri", updated-by: tx-sender})
     (ok true)))
+;; Ownership transfer event
+(define-data-var ownership-transfer-event (tuple (previous-owner principal) (new-owner principal)) 
+  {previous-owner: tx-sender, new-owner: tx-sender})
+
+;; Access control functions
+(define-read-only (get-owner)
+  (ok (var-get contract-owner)))
+
+(define-public (transfer-ownership (new-owner principal))
+  (begin
+    ;; Check if contract is paused
+    (try! (is-paused-check))
+    
+    ;; Only current owner can transfer ownership
+    (asserts! (is-owner) (err .enhanced-sip-010-trait.ERR-UNAUTHORIZED))
+    
+    ;; Prevent transferring to zero address
+    (asserts! (not (is-eq new-owner 'SP000000000000000000002Q6VF78)) 
+              (err .enhanced-sip-010-trait.ERR-ZERO-AMOUNT))
+    
+    ;; Store previous owner for event
+    (let ((previous-owner (var-get contract-owner)))
+      ;; Update owner
+      (var-set contract-owner new-owner)
+      
+      ;; Emit ownership transfer event
+      (var-set ownership-transfer-event {previous-owner: previous-owner, new-owner: new-owner})
+      
+      (ok true))))
+
+;; Admin function check helper
+(define-private (require-owner)
+  (asserts! (is-owner) (err .enhanced-sip-010-trait.ERR-UNAUTHORIZED)))
