@@ -503,3 +503,41 @@
 ;; Additional access control layers
 (define-private (require-valid-caller)
   (asserts! (not (is-eq tx-sender contract-caller)) (err .enhanced-sip-010-trait.ERR-UNAUTHORIZED)))
+;; Gas optimization helpers
+(define-private (batch-balance-update (updates (list 10 {account: principal, balance: uint})))
+  (fold update-single-balance updates (ok true)))
+
+(define-private (update-single-balance 
+  (update {account: principal, balance: uint}) 
+  (previous (response bool uint)))
+  (match previous
+    success (begin
+              (map-set balances (get account update) (get balance update))
+              (ok true))
+    error-val (err error-val)))
+
+;; Efficient storage access patterns
+(define-private (get-balance-cached (account principal))
+  (default-to u0 (map-get? balances account)))
+
+(define-private (get-allowance-cached (owner principal) (spender principal))
+  (default-to u0 (map-get? allowances {owner: owner, spender: spender})))
+
+;; Optimized event emission for batch operations
+(define-private (emit-batch-events (transfers (list 100 {from: principal, to: principal, amount: uint})))
+  (fold emit-single-transfer-event transfers (ok true)))
+
+(define-private (emit-single-transfer-event 
+  (transfer {from: principal, to: principal, amount: uint}) 
+  (previous (response bool uint)))
+  (match previous
+    success (begin
+              (emit-transfer-event (get from transfer) (get to transfer) (get amount transfer) none)
+              (ok true))
+    error-val (err error-val)))
+
+;; Function call overhead optimization
+(define-private (bulk-validation (amount uint) (from principal) (to principal))
+  (and (> amount u0)
+       (not (is-eq from 'SP000000000000000000002Q6VF78))
+       (not (is-eq to 'SP000000000000000000002Q6VF78))))
