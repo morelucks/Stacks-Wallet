@@ -307,3 +307,42 @@
 ;; Admin function check helper
 (define-private (require-owner)
   (asserts! (is-owner) (err .enhanced-sip-010-trait.ERR-UNAUTHORIZED)))
+;; Pause event
+(define-data-var pause-event (tuple (paused bool) (by principal)) 
+  {paused: false, by: tx-sender})
+
+;; Pausable functions
+(define-public (pause)
+  (begin
+    ;; Only owner can pause
+    (asserts! (is-owner) (err .enhanced-sip-010-trait.ERR-UNAUTHORIZED))
+    
+    ;; Check if already paused
+    (asserts! (not (var-get paused)) (err .enhanced-sip-010-trait.ERR-PAUSED))
+    
+    ;; Set paused state
+    (var-set paused true)
+    
+    ;; Emit pause event
+    (var-set pause-event {paused: true, by: tx-sender})
+    
+    (ok true)))
+
+(define-public (unpause)
+  (begin
+    ;; Only owner can unpause
+    (asserts! (is-owner) (err .enhanced-sip-010-trait.ERR-UNAUTHORIZED))
+    
+    ;; Check if currently paused
+    (asserts! (var-get paused) (err .enhanced-sip-010-trait.ERR-ZERO-AMOUNT))
+    
+    ;; Set unpaused state
+    (var-set paused false)
+    
+    ;; Emit unpause event
+    (var-set pause-event {paused: false, by: tx-sender})
+    
+    (ok true)))
+
+(define-read-only (is-paused)
+  (ok (var-get paused)))
