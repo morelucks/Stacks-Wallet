@@ -228,3 +228,49 @@
       (var-set burn-event {from: from, amount: amount})
       
       (ok true))))
+;; Metadata update event
+(define-data-var metadata-update-event (tuple (field (string-ascii 10)) (updated-by principal)) 
+  {field: "name", updated-by: tx-sender})
+
+;; Metadata functions
+(define-read-only (get-name)
+  (ok (var-get token-name)))
+
+(define-read-only (get-symbol)
+  (ok (var-get token-symbol)))
+
+(define-read-only (get-decimals)
+  (let ((decimals (var-get token-decimals)))
+    ;; Ensure decimals are within valid range (0-18)
+    (asserts! (<= decimals u18) (err .enhanced-sip-010-trait.ERR-INVALID-PAGINATION))
+    (ok decimals)))
+
+(define-read-only (get-token-uri)
+  (ok (var-get token-uri)))
+
+(define-read-only (get-total-supply)
+  (ok (var-get total-supply)))
+
+;; Metadata update functions (owner only)
+(define-public (set-name (new-name (string-ascii 32)))
+  (begin
+    (asserts! (is-owner) (err .enhanced-sip-010-trait.ERR-UNAUTHORIZED))
+    (asserts! (> (len new-name) u0) (err .enhanced-sip-010-trait.ERR-ZERO-AMOUNT))
+    (var-set token-name new-name)
+    (var-set metadata-update-event {field: "name", updated-by: tx-sender})
+    (ok true)))
+
+(define-public (set-symbol (new-symbol (string-ascii 32)))
+  (begin
+    (asserts! (is-owner) (err .enhanced-sip-010-trait.ERR-UNAUTHORIZED))
+    (asserts! (> (len new-symbol) u0) (err .enhanced-sip-010-trait.ERR-ZERO-AMOUNT))
+    (var-set token-symbol new-symbol)
+    (var-set metadata-update-event {field: "symbol", updated-by: tx-sender})
+    (ok true)))
+
+(define-public (set-token-uri (new-uri (optional (string-utf8 256))))
+  (begin
+    (asserts! (is-owner) (err .enhanced-sip-010-trait.ERR-UNAUTHORIZED))
+    (var-set token-uri new-uri)
+    (var-set metadata-update-event {field: "uri", updated-by: tx-sender})
+    (ok true)))
