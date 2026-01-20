@@ -414,3 +414,29 @@
 ;; Helper to check if transfer involves account
 (define-private (transfer-involves-account (transfer-record {from: principal, to: principal, amount: uint, block: uint}) (account principal))
   (or (is-eq (get from transfer-record) account) (is-eq (get to transfer-record) account)))
+;; Input validation helpers
+(define-private (validate-amount (amount uint))
+  (asserts! (> amount u0) (err .enhanced-sip-010-trait.ERR-ZERO-AMOUNT)))
+
+(define-private (validate-principal (account principal))
+  (asserts! (not (is-eq account 'SP000000000000000000002Q6VF78)) 
+            (err .enhanced-sip-010-trait.ERR-ZERO-AMOUNT)))
+
+(define-private (validate-string-not-empty (str (string-ascii 32)))
+  (asserts! (> (len str) u0) (err .enhanced-sip-010-trait.ERR-ZERO-AMOUNT)))
+
+(define-private (validate-decimals (decimals uint))
+  (asserts! (<= decimals u18) (err .enhanced-sip-010-trait.ERR-INVALID-PAGINATION)))
+
+;; Enhanced validation for batch operations
+(define-private (validate-batch-size (batch-list (list 100 {to: principal, amount: uint, memo: (optional (buff 34))})))
+  (begin
+    (asserts! (<= (len batch-list) u100) (err .enhanced-sip-010-trait.ERR-BATCH-LIMIT-EXCEEDED))
+    (asserts! (> (len batch-list) u0) (err .enhanced-sip-010-trait.ERR-ZERO-AMOUNT))))
+
+;; Parameter sanitization
+(define-private (sanitize-pagination (offset uint) (limit uint))
+  (begin
+    (asserts! (> limit u0) (err .enhanced-sip-010-trait.ERR-INVALID-PAGINATION))
+    (asserts! (<= limit u50) (err .enhanced-sip-010-trait.ERR-INVALID-PAGINATION))
+    (ok {offset: offset, limit: limit})))
