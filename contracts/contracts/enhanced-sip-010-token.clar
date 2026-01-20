@@ -368,3 +368,24 @@
   (match previous-result
     success (transfer (get amount transfer-data) tx-sender (get to transfer-data) (get memo transfer-data))
     error-value (err error-value)))
+;; Historical balance query function
+(define-read-only (get-balance-at-block (account principal) (target-block uint))
+  (begin
+    ;; Check if target block is in the future
+    (asserts! (<= target-block block-height) (err .enhanced-sip-010-trait.ERR-INVALID-PAGINATION))
+    
+    ;; Try to get historical balance
+    (match (map-get? balance-history {account: account, block: target-block})
+      balance (ok balance)
+      ;; If no exact match, return error for unavailable data
+      (err .enhanced-sip-010-trait.ERR-HISTORICAL-DATA-UNAVAILABLE))))
+
+;; Enhanced balance history recording with block validation
+(define-private (record-balance-history-enhanced (account principal) (block uint))
+  (begin
+    ;; Only record if block is current or past
+    (if (<= block block-height)
+      (map-set balance-history 
+        {account: account, block: block}
+        (default-to u0 (map-get? balances account)))
+      false)))
