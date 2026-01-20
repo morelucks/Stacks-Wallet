@@ -27,3 +27,60 @@
 
 ;; Transfer counter for history
 (define-data-var transfer-counter uint u0)
+;; Event definitions
+(define-data-var transfer-event (tuple (from principal) (to principal) (amount uint) (memo (optional (buff 34)))) 
+  {from: tx-sender, to: tx-sender, amount: u0, memo: none})
+
+;; Helper functions
+(define-private (is-paused-check)
+  (if (var-get paused)
+    (err .enhanced-sip-010-trait.ERR-PAUSED)
+    (ok true)))
+
+(define-private (record-balance-history (account principal))
+  (map-set balance-history 
+    {account: account, block: block-height}
+    (default-to u0 (map-get? balances account))))
+
+;; Enhanced transfer function
+(define-public (transfer (amount uint) (from principal) (to principal) (memo (optional (buff 34))))
+  (begin
+    ;; Check if contract is paused
+    (try! (is-paused-check))
+    
+    ;; Validate amount is not zero
+    (asserts! (> amount u0) (err .enhanced-sip-010-trait.ERR-ZERO-AMOUNT))
+    
+    ;; Check sender authorization
+    (asserts! (or (is-eq tx-sender from) (is-eq contract-caller from)) 
+              (err .enhanced-sip-010-trait.ERR-UNAUTHORIZED))
+    
+    ;; Get current balances
+    (let ((sender-balance (default-to u0 (map-get? balances from)))
+          (recipient-balance (default-to u0 (map-get? balances to))))
+      
+      ;; Check sufficient balance
+      (asserts! (>= sender-balance amount) (err .enhanced-sip-010-trait.ERR-INSUFFICIENT-BALANCE))
+      
+      ;; Record balance history before transfer
+      (record-balance-history from)
+      (record-balance-history to)
+      
+      ;; Update balances
+      (map-set balances from (- sender-balance amount))
+      (map-set balances to (+ recipient-balance amount))
+      
+      ;; Record transfer in history
+      (let ((counter (var-get transfer-counter)))
+        (map-set transfer-records counter 
+          {from: from, to: to, amount: amount, block: block-height, memo: memo})
+        (var-set transfer-counter (+ counter u1)))
+      
+      ;; Emit transfer event
+      (var-set transfer-event {from: from, to: to, amount: amount, memo: memo})
+      
+      (ok true))))
+
+;; Get balance function
+(define-read-only (get-balance (account principal))
+  (ok (default-to u0 (map-get? balances account))))
