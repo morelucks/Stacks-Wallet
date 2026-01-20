@@ -572,3 +572,51 @@
 ;; Performance optimized error handling
 (define-private (fast-error-check (condition bool) (error-code uint))
   (if condition (ok true) (err error-code)))
+;; Backward compatibility with original SIP-010
+(define-public (transfer-sip010 (amount uint) (from principal) (to principal) (memo (optional (buff 34))))
+  (transfer amount from to memo))
+
+;; Integration helpers for common use cases
+(define-public (approve-and-transfer (spender principal) (amount uint) (to principal))
+  (begin
+    (try! (approve spender amount))
+    (transfer-from tx-sender to amount none)))
+
+(define-public (mint-and-transfer (to principal) (amount uint) (final-recipient principal))
+  (begin
+    (try! (mint to amount))
+    (transfer amount to final-recipient none)))
+
+;; Contract upgrade mechanisms
+(define-data-var contract-version uint u1)
+(define-data-var upgrade-authorized bool false)
+
+(define-public (authorize-upgrade)
+  (begin
+    (asserts! (is-owner) (err .enhanced-sip-010-trait.ERR-UNAUTHORIZED))
+    (var-set upgrade-authorized true)
+    (ok true)))
+
+(define-read-only (get-contract-version)
+  (ok (var-get contract-version)))
+
+;; Deployment and initialization
+(define-public (initialize (name (string-ascii 32)) (symbol (string-ascii 32)) (decimals uint) (initial-supply uint))
+  (begin
+    ;; Only allow initialization once
+    (asserts! (is-eq (var-get total-supply) u0) (err .enhanced-sip-010-trait.ERR-UNAUTHORIZED))
+    
+    ;; Validate parameters
+    (try! (validate-string-not-empty name))
+    (try! (validate-string-not-empty symbol))
+    (try! (validate-decimals decimals))
+    
+    ;; Set token metadata
+    (var-set token-name name)
+    (var-set token-symbol symbol)
+    (var-set token-decimals decimals)
+    
+    ;; Mint initial supply to deployer
+    (if (> initial-supply u0)
+      (mint tx-sender initial-supply)
+      (ok true))))
