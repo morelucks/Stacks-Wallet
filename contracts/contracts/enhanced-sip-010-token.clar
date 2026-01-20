@@ -467,3 +467,39 @@
   (and (not (is-eq from 'SP000000000000000000002Q6VF78))
        (not (is-eq to 'SP000000000000000000002Q6VF78))
        (> amount u0)))
+;; Security enhancements
+(define-data-var reentrancy-guard bool false)
+
+;; Reentrancy protection
+(define-private (reentrancy-check)
+  (begin
+    (asserts! (not (var-get reentrancy-guard)) (err .enhanced-sip-010-trait.ERR-UNAUTHORIZED))
+    (var-set reentrancy-guard true)
+    (ok true)))
+
+(define-private (reentrancy-clear)
+  (var-set reentrancy-guard false))
+
+;; Overflow/underflow protection
+(define-private (safe-add (a uint) (b uint))
+  (let ((result (+ a b)))
+    (asserts! (>= result a) (err .enhanced-sip-010-trait.ERR-BATCH-LIMIT-EXCEEDED))
+    (ok result)))
+
+(define-private (safe-sub (a uint) (b uint))
+  (begin
+    (asserts! (>= a b) (err .enhanced-sip-010-trait.ERR-INSUFFICIENT-BALANCE))
+    (ok (- a b))))
+
+;; Rate limiting for sensitive operations
+(define-map last-operation-block principal uint)
+
+(define-private (check-rate-limit (account principal))
+  (let ((last-block (default-to u0 (map-get? last-operation-block account))))
+    (asserts! (> block-height last-block) (err .enhanced-sip-010-trait.ERR-UNAUTHORIZED))
+    (map-set last-operation-block account block-height)
+    (ok true)))
+
+;; Additional access control layers
+(define-private (require-valid-caller)
+  (asserts! (not (is-eq tx-sender contract-caller)) (err .enhanced-sip-010-trait.ERR-UNAUTHORIZED)))
