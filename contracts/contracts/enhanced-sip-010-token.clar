@@ -147,3 +147,44 @@
 ;; Get allowance function
 (define-read-only (get-allowance (owner principal) (spender principal))
   (ok (default-to u0 (map-get? allowances {owner: owner, spender: spender}))))
+;; Mint event
+(define-data-var mint-event (tuple (to principal) (amount uint)) 
+  {to: tx-sender, amount: u0})
+
+;; Owner-only check
+(define-private (is-owner)
+  (is-eq tx-sender (var-get contract-owner)))
+
+;; Mint function
+(define-public (mint (to principal) (amount uint))
+  (begin
+    ;; Check if contract is paused
+    (try! (is-paused-check))
+    
+    ;; Check authorization (only owner can mint)
+    (asserts! (is-owner) (err .enhanced-sip-010-trait.ERR-UNAUTHORIZED))
+    
+    ;; Validate amount is not zero
+    (asserts! (> amount u0) (err .enhanced-sip-010-trait.ERR-ZERO-AMOUNT))
+    
+    ;; Get current balance and total supply
+    (let ((current-balance (default-to u0 (map-get? balances to)))
+          (current-supply (var-get total-supply)))
+      
+      ;; Record balance history before mint
+      (record-balance-history to)
+      
+      ;; Update balance and total supply
+      (map-set balances to (+ current-balance amount))
+      (var-set total-supply (+ current-supply amount))
+      
+      ;; Record mint in transfer history (from zero address)
+      (let ((counter (var-get transfer-counter)))
+        (map-set transfer-records counter 
+          {from: 'SP000000000000000000002Q6VF78, to: to, amount: amount, block: block-height, memo: none})
+        (var-set transfer-counter (+ counter u1)))
+      
+      ;; Emit mint event
+      (var-set mint-event {to: to, amount: amount})
+      
+      (ok true))))
