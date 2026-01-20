@@ -541,3 +541,34 @@
   (and (> amount u0)
        (not (is-eq from 'SP000000000000000000002Q6VF78))
        (not (is-eq to 'SP000000000000000000002Q6VF78))))
+;; Enhanced error handling with context
+(define-private (error-with-context (error-code uint) (context (string-ascii 50)))
+  (begin
+    ;; Log error context (in a real implementation, this would be more sophisticated)
+    (print {error: error-code, context: context, block: block-height, caller: tx-sender})
+    (err error-code)))
+
+;; Detailed error reporting functions
+(define-private (insufficient-balance-error (required uint) (available uint))
+  (error-with-context .enhanced-sip-010-trait.ERR-INSUFFICIENT-BALANCE "insufficient balance"))
+
+(define-private (insufficient-allowance-error (required uint) (available uint))
+  (error-with-context .enhanced-sip-010-trait.ERR-INSUFFICIENT-ALLOWANCE "insufficient allowance"))
+
+(define-private (unauthorized-error (attempted-action (string-ascii 20)))
+  (error-with-context .enhanced-sip-010-trait.ERR-UNAUTHORIZED "unauthorized access"))
+
+(define-private (paused-error (attempted-function (string-ascii 20)))
+  (error-with-context .enhanced-sip-010-trait.ERR-PAUSED "contract paused"))
+
+;; Error recovery mechanisms
+(define-private (try-recover-from-error (error-code uint))
+  (if (is-eq error-code .enhanced-sip-010-trait.ERR-PAUSED)
+    ;; For pause errors, suggest checking pause status
+    (print "Contract is paused - check is-paused function")
+    ;; For other errors, provide generic guidance
+    (print "Check function parameters and authorization")))
+
+;; Performance optimized error handling
+(define-private (fast-error-check (condition bool) (error-code uint))
+  (if condition (ok true) (err error-code)))
