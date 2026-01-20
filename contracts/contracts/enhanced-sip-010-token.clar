@@ -440,3 +440,30 @@
     (asserts! (> limit u0) (err .enhanced-sip-010-trait.ERR-INVALID-PAGINATION))
     (asserts! (<= limit u50) (err .enhanced-sip-010-trait.ERR-INVALID-PAGINATION))
     (ok {offset: offset, limit: limit})))
+;; Event emission optimization
+(define-private (emit-transfer-event (from principal) (to principal) (amount uint) (memo (optional (buff 34))))
+  (var-set transfer-event {from: from, to: to, amount: amount, memo: memo}))
+
+(define-private (emit-approval-event (owner principal) (spender principal) (amount uint))
+  (var-set approval-event {owner: owner, spender: spender, amount: amount}))
+
+(define-private (emit-mint-event (to principal) (amount uint))
+  (var-set mint-event {to: to, amount: amount}))
+
+(define-private (emit-burn-event (from principal) (amount uint))
+  (var-set burn-event {from: from, amount: amount}))
+
+(define-private (emit-ownership-event (previous principal) (new principal))
+  (var-set ownership-transfer-event {previous-owner: previous, new-owner: new}))
+
+(define-private (emit-pause-event (is-paused bool) (by principal))
+  (var-set pause-event {paused: is-paused, by: by}))
+
+(define-private (emit-metadata-event (field (string-ascii 10)) (by principal))
+  (var-set metadata-update-event {field: field, updated-by: by}))
+
+;; Event validation helpers
+(define-private (validate-event-data (from principal) (to principal) (amount uint))
+  (and (not (is-eq from 'SP000000000000000000002Q6VF78))
+       (not (is-eq to 'SP000000000000000000002Q6VF78))
+       (> amount u0)))
