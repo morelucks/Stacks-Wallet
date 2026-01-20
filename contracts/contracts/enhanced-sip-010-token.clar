@@ -346,3 +346,25 @@
 
 (define-read-only (is-paused)
   (ok (var-get paused)))
+;; Batch transfer function
+(define-public (batch-transfer (transfers (list 100 {to: principal, amount: uint, memo: (optional (buff 34))})))
+  (begin
+    ;; Check if contract is paused
+    (try! (is-paused-check))
+    
+    ;; Check batch size limit
+    (asserts! (<= (len transfers) u100) (err .enhanced-sip-010-trait.ERR-BATCH-LIMIT-EXCEEDED))
+    
+    ;; Handle empty batch
+    (if (is-eq (len transfers) u0)
+      (ok true)
+      ;; Process batch transfers
+      (fold process-batch-transfer transfers (ok true)))))
+
+;; Helper function to process individual transfers in batch
+(define-private (process-batch-transfer 
+  (transfer-data {to: principal, amount: uint, memo: (optional (buff 34))}) 
+  (previous-result (response bool uint)))
+  (match previous-result
+    success (transfer (get amount transfer-data) tx-sender (get to transfer-data) (get memo transfer-data))
+    error-value (err error-value)))
