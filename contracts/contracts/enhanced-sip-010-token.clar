@@ -188,3 +188,43 @@
       (var-set mint-event {to: to, amount: amount})
       
       (ok true))))
+;; Burn event
+(define-data-var burn-event (tuple (from principal) (amount uint)) 
+  {from: tx-sender, amount: u0})
+
+;; Burn function
+(define-public (burn (from principal) (amount uint))
+  (begin
+    ;; Check if contract is paused
+    (try! (is-paused-check))
+    
+    ;; Check authorization (owner can burn anyone's tokens, users can burn their own)
+    (asserts! (or (is-owner) (is-eq tx-sender from)) (err .enhanced-sip-010-trait.ERR-UNAUTHORIZED))
+    
+    ;; Validate amount is not zero
+    (asserts! (> amount u0) (err .enhanced-sip-010-trait.ERR-ZERO-AMOUNT))
+    
+    ;; Get current balance and total supply
+    (let ((current-balance (default-to u0 (map-get? balances from)))
+          (current-supply (var-get total-supply)))
+      
+      ;; Check sufficient balance for burn
+      (asserts! (>= current-balance amount) (err .enhanced-sip-010-trait.ERR-INSUFFICIENT-BALANCE-BURN))
+      
+      ;; Record balance history before burn
+      (record-balance-history from)
+      
+      ;; Update balance and total supply
+      (map-set balances from (- current-balance amount))
+      (var-set total-supply (- current-supply amount))
+      
+      ;; Record burn in transfer history (to zero address)
+      (let ((counter (var-get transfer-counter)))
+        (map-set transfer-records counter 
+          {from: from, to: 'SP000000000000000000002Q6VF78, amount: amount, block: block-height, memo: none})
+        (var-set transfer-counter (+ counter u1)))
+      
+      ;; Emit burn event
+      (var-set burn-event {from: from, amount: amount})
+      
+      (ok true))))
