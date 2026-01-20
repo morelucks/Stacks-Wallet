@@ -84,3 +84,66 @@
 ;; Get balance function
 (define-read-only (get-balance (account principal))
   (ok (default-to u0 (map-get? balances account))))
+;; Approval event
+(define-data-var approval-event (tuple (owner principal) (spender principal) (amount uint)) 
+  {owner: tx-sender, spender: tx-sender, amount: u0})
+
+;; Approve function
+(define-public (approve (spender principal) (amount uint))
+  (begin
+    ;; Check if contract is paused
+    (try! (is-paused-check))
+    
+    ;; Set allowance
+    (map-set allowances {owner: tx-sender, spender: spender} amount)
+    
+    ;; Emit approval event
+    (var-set approval-event {owner: tx-sender, spender: spender, amount: amount})
+    
+    (ok true)))
+
+;; Transfer from allowance
+(define-public (transfer-from (owner principal) (to principal) (amount uint) (memo (optional (buff 34))))
+  (begin
+    ;; Check if contract is paused
+    (try! (is-paused-check))
+    
+    ;; Validate amount is not zero
+    (asserts! (> amount u0) (err .enhanced-sip-010-trait.ERR-ZERO-AMOUNT))
+    
+    ;; Get current allowance
+    (let ((current-allowance (default-to u0 (map-get? allowances {owner: owner, spender: tx-sender})))
+          (owner-balance (default-to u0 (map-get? balances owner)))
+          (recipient-balance (default-to u0 (map-get? balances to))))
+      
+      ;; Check sufficient allowance
+      (asserts! (>= current-allowance amount) (err .enhanced-sip-010-trait.ERR-INSUFFICIENT-ALLOWANCE))
+      
+      ;; Check sufficient balance
+      (asserts! (>= owner-balance amount) (err .enhanced-sip-010-trait.ERR-INSUFFICIENT-BALANCE))
+      
+      ;; Record balance history before transfer
+      (record-balance-history owner)
+      (record-balance-history to)
+      
+      ;; Update balances
+      (map-set balances owner (- owner-balance amount))
+      (map-set balances to (+ recipient-balance amount))
+      
+      ;; Update allowance
+      (map-set allowances {owner: owner, spender: tx-sender} (- current-allowance amount))
+      
+      ;; Record transfer in history
+      (let ((counter (var-get transfer-counter)))
+        (map-set transfer-records counter 
+          {from: owner, to: to, amount: amount, block: block-height, memo: memo})
+        (var-set transfer-counter (+ counter u1)))
+      
+      ;; Emit transfer event
+      (var-set transfer-event {from: owner, to: to, amount: amount, memo: memo})
+      
+      (ok true))))
+
+;; Get allowance function
+(define-read-only (get-allowance (owner principal) (spender principal))
+  (ok (default-to u0 (map-get? allowances {owner: owner, spender: spender}))))
