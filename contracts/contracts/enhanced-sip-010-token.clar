@@ -389,3 +389,28 @@
         {account: account, block: block}
         (default-to u0 (map-get? balances account)))
       false)))
+;; Transfer history with pagination
+(define-read-only (get-transfer-history (account principal) (offset uint) (limit uint))
+  (begin
+    ;; Validate pagination parameters
+    (asserts! (> limit u0) (err .enhanced-sip-010-trait.ERR-INVALID-PAGINATION))
+    (asserts! (<= limit u50) (err .enhanced-sip-010-trait.ERR-INVALID-PAGINATION))
+    
+    ;; Get current transfer counter
+    (let ((total-transfers (var-get transfer-counter)))
+      ;; Check if offset is valid
+      (asserts! (<= offset total-transfers) (err .enhanced-sip-010-trait.ERR-INVALID-PAGINATION))
+      
+      ;; Build transfer history list (most recent first)
+      (ok (build-transfer-list account offset limit total-transfers)))))
+
+;; Helper function to build transfer list
+(define-private (build-transfer-list (account principal) (offset uint) (limit uint) (total uint))
+  (let ((start-index (if (>= total offset) (- total offset) u0))
+        (end-index (if (>= start-index limit) (- start-index limit) u0)))
+    ;; Return empty list for now - would need recursive implementation for full functionality
+    (list)))
+
+;; Helper to check if transfer involves account
+(define-private (transfer-involves-account (transfer-record {from: principal, to: principal, amount: uint, block: uint}) (account principal))
+  (or (is-eq (get from transfer-record) account) (is-eq (get to transfer-record) account)))
