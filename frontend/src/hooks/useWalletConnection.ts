@@ -1,92 +1,24 @@
-import { useCallback, useEffect, useState } from 'react'
-import { useAppKit } from '@reown/appkit/react'
-import { connectStacksWallet, disconnectStacksWallet, isStacksWalletConnected } from '../config/stacks'
-import { useWallet } from '../context/WalletContext'
+import { useAppKitAccount } from '@reown/appkit/react'
+import { isStacksWalletConnected, getStacksUserData } from '../config/stacks'
+import { useState, useEffect } from 'react'
 
 export function useWalletConnection() {
-    const { open: openAppKit } = useAppKit()
-    const wallet = useWallet()
-    const [isConnecting, setIsConnecting] = useState(false)
-
-    // Connect EVM wallet
-    const connectEVM = useCallback(async () => {
-        setIsConnecting(true)
-        try {
-            await openAppKit()
-        } catch (error) {
-            console.error('Failed to connect EVM wallet:', error)
-        } finally {
-            setIsConnecting(false)
-        }
-    }, [openAppKit])
-
-    // Connect Stacks wallet
-    const connectStacks = useCallback(async () => {
-        setIsConnecting(true)
-        try {
-            connectStacksWallet()
-        } catch (error) {
-            console.error('Failed to connect Stacks wallet:', error)
-            setIsConnecting(false)
-        }
-    }, [])
-
-    // Disconnect Stacks wallet
-    const disconnectStacks = useCallback(() => {
-        disconnectStacksWallet()
-        wallet.refreshWalletStatus()
-    }, [wallet])
-
-    // Connect both wallets
-    const connectBothWallets = useCallback(async () => {
-        setIsConnecting(true)
-        try {
-            // Connect EVM first
-            if (!wallet.evmWallet.isConnected) {
-                await openAppKit()
-            }
-            
-            // Then connect Stacks
-            if (!wallet.stacksWallet.isConnected) {
-                connectStacksWallet()
-            }
-        } catch (error) {
-            console.error('Failed to connect wallets:', error)
-        } finally {
-            setIsConnecting(false)
-        }
-    }, [wallet, openAppKit])
-
-    // Check if user has the required wallets installed
-    const [hasStacksWallet, setHasStacksWallet] = useState(false)
+    const { isConnected: isEvmConnected, address: evmAddress } = useAppKitAccount()
+    const [isStacksConnected, setIsStacksConnected] = useState(false)
+    const [stacksAddress, setStacksAddress] = useState<string | null>(null)
 
     useEffect(() => {
-        // Check if Stacks wallet is available
-        const checkStacksWallet = () => {
-            setHasStacksWallet(typeof window !== 'undefined' && 'StacksProvider' in window)
+        const check = () => {
+            const connected = isStacksWalletConnected()
+            setIsStacksConnected(connected)
+            if (connected) {
+                setStacksAddress(getStacksUserData()?.profile?.stxAddress?.testnet || null)
+            }
         }
-        
-        checkStacksWallet()
-        
-        // Recheck when window loads
-        if (document.readyState === 'loading') {
-            window.addEventListener('load', checkStacksWallet)
-            return () => window.removeEventListener('load', checkStacksWallet)
-        }
+        check()
+        window.addEventListener('focus', check)
+        return () => window.removeEventListener('focus', check)
     }, [])
 
-    return {
-        // Connection methods
-        connectEVM,
-        connectStacks,
-        disconnectStacks,
-        connectBothWallets,
-        
-        // Status
-        isConnecting,
-        hasStacksWallet,
-        
-        // Wallet info (from context)
-        ...wallet
-    }
+    return { isEvmConnected, evmAddress, isStacksConnected, stacksAddress, isAnyConnected: isEvmConnected || isStacksConnected }
 }
