@@ -24,7 +24,7 @@ export function initializeAppKit() {
             socials: ['google', 'x', 'github', 'discord', 'apple', 'farcaster'],
             emailShowWallets: true,
             analytics: true,
-            onramp: true /* Enabled */,
+            onramp: true /* Enabled */ /* Enabled */,
             swaps: true /* Swaps Active */,
         },
         themeMode: 'system',
