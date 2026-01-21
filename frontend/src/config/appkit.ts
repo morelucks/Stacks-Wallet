@@ -27,7 +27,7 @@ export function initializeAppKit() {
             onramp: true,
             swaps: true,
         },
-        themeMode: 'light',
+        themeMode: 'system',
         themeVariables: {
             '--w3m-color-mix': '#FF6B35',
             '--w3m-color-mix-strength': 20,
