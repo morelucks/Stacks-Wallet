@@ -58,3 +58,6 @@ export const getSIP10Balances = async (address: string) => {
     // Placeholder for SIP-10 token fetching
     return []
 }
+export const signTransaction = async (tx: any) => {
+    // Signing logic placeholder
+}
