@@ -36,3 +36,8 @@ export function initializeAppKit() {
         }
     })
 }
+// Exporting theme variables for custom usage
+export const appKitTheme = {
+    '--w3m-font-family': 'Inter, sans-serif',
+    '--w3m-accent': '#FF6B35'
+}
