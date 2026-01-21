@@ -240,6 +240,7 @@ EOF
 make_commit "feat(analytics): add initialization logging for analytics tracking"
 
 # Commit 22
+mkdir -p "$FRONTEND_DIR/src/components/guards"
 cat > "$FRONTEND_DIR/src/components/guards/AuthGuard.tsx" <<EOF
 import { useWalletConnection } from '../../hooks/useWalletConnection'
 export function AuthGuard({ children }: { children: React.ReactNode }) {
