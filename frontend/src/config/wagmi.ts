@@ -14,3 +14,5 @@ export const wagmiAdapter = new WagmiAdapter({
     projectId,
     networks
 })
+// Placeholder for ERC-20 token support helpers
+export const getERC20Balance = () => {}
