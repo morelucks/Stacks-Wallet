@@ -1,0 +1,17 @@
+{
+  "name": "hooks-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch server.js",
+    "start": "node server.js",
+    "test:webhook": "node test-webhook.js",
+    "test:activity": "node test-activity.js"
+  },
+  "dependencies": {
+    "express": "^4.21.1"
+  }
+}
+
+

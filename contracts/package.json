@@ -24,7 +24,7 @@
     "replace-mint-txs": "tsx scripts/replace-mint-transactions.ts",
     "fix-all-pending": "tsx scripts/fix-all-pending.ts",
     "simple-mint": "tsx scripts/simple-mint.ts",
-    "mint-5": "tsx scripts/mint-5-times.ts"
+    "generate-50-txs": "tsx scripts/generate-50-txs.ts"
   },
   "author": "",
   "license": "ISC",

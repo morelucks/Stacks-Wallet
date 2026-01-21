@@ -1,0 +1,32 @@
+name: token-contract-v2-mint-transfer
+chain: stacks
+network: mainnet
+
+# Watches your deployed SIP-010 token contract v2 on mainnet
+# Update contract_identifier if you redeploy with a new name or address.
+filters:
+  - contract_call:
+      contract_identifier: "SP1EQNTKNRGME36P9EEXZCFFNCYBA50VN51676JB.token-contract-v2-1766049545741"
+      function_name: "mint"
+  - contract_call:
+      contract_identifier: "SP1EQNTKNRGME36P9EEXZCFFNCYBA50VN51676JB.token-contract-v2-1766049545741"
+      function_name: "transfer"
+
+delivery:
+  # Replace with your deployed webhook endpoint
+  url: https://your-service.example.com/hooks/stacks
+  # Optional shared secret to verify requests
+  secret: "<SHARED_SECRET>"
+
+# Optional: start from a specific block height (uncomment to use)
+# start_block: 0
+
+
+
+
+
+
+
+
+
+

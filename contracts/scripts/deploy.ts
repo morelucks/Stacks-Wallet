@@ -10,6 +10,11 @@ dotenv.config();
 // Load environment variables
 const PRIVATE_KEY = process.env.PRIVATE_KEY || process.env.DEPLOYER_KEY;
 const NETWORK_ENV = process.env.STACKS_NETWORK || 'mainnet'; // Default to mainnet for Builder Challenge
+// Optional overrides for contract names so you can deploy v2/v3 without collisions
+const TRAIT_NAME = process.env.TRAIT_NAME || 'sip-010-trait';
+const TOKEN_BASE_NAME = process.env.TOKEN_BASE_NAME || 'token-contract';
+// Fees are specified in micro-STX. Default 150_000 (0.15 STX) if not overridden.
+const DEPLOY_FEE = Number.parseInt(process.env.FEE || '150000', 10);
 
 if (!PRIVATE_KEY) {
     console.error("Error: PRIVATE_KEY or DEPLOYER_KEY environment variable is required.");
@@ -39,7 +44,7 @@ async function deployContract(contractFileName: string, contractName: string) {
         network,
         anchorMode: AnchorMode.Any,
         clarityVersion: ClarityVersion.Clarity4,
-        fee: NETWORK_ENV === 'mainnet' ? 300000 : 150000, // Higher fee for mainnet
+        fee: 150000,
         postConditionMode: 0x01,
     };
 
@@ -64,7 +69,6 @@ async function deployContract(contractFileName: string, contractName: string) {
             console.log('\n✅ Contract deployed successfully!');
             console.log(`📋 Transaction ID: ${broadcastResponse.txid}`);
             console.log(`🔗 Explorer: https://explorer.hiro.so/txid/${broadcastResponse.txid}?chain=${NETWORK_ENV}`);
-            console.log(`📄 Contract Address: ${process.env.ADMIN_ADDRESS}.${contractName}`);
             return broadcastResponse.txid;
         }
     } catch (error) {
@@ -80,28 +84,24 @@ async function deployAll() {
     try {
         // Skip trait deployment since it already exists
         console.log("1️⃣ SIP-010 trait already exists, skipping...");
-        const traitAddress = NETWORK_ENV === 'mainnet' 
-            ? "SP3FBR2AGK5H9QBDH3EEN6DF8EK8JY7RX8QJ5SVTE.sip-010-trait-ft-standard"
-            : "ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM.sip-010-trait-ft-standard";
-        console.log(`   Contract: ${traitAddress}`);
+        console.log("   Contract: ST8DAC2FHJFX599JR491PEAEM0CAXP95JXZ00MBD.sip-010-trait");
         
         // Deploy token contract
         console.log("\n2️⃣ Deploying token contract...");
         const timestamp = Date.now();
-        const tokenContractName = `token-contract-${timestamp}`;
+        // Use custom name if provided, otherwise use timestamp-based name
+        const customName = process.env.TOKEN_CONTRACT_NAME;
+        const tokenContractName = customName || `token-contract-v3-${timestamp}`;
         await deployContract('token-contract.clar', tokenContractName);
         
         console.log(`\n🎉 All contracts deployed successfully!`);
-        console.log(`📝 Trait Contract: ${traitAddress}`);
-        console.log(`📝 Token Contract: ${process.env.ADMIN_ADDRESS}.${tokenContractName}`);
-        console.log(`\n📋 Update your .env file with:`);
-        console.log(`CONTRACT_ADDRESS=${process.env.ADMIN_ADDRESS}.${tokenContractName}`);
+        console.log(`📝 Trait Contract: sip-010-trait`);
+        console.log(`📝 Token Contract: ${tokenContractName}`);
         console.log(`\n💡 Next steps:`);
         console.log(`   1. Wait for transaction confirmations (~10 minutes)`);
-        console.log(`   2. Update CONTRACT_ADDRESS in .env file`);
-        console.log(`   3. Share your contract addresses on GitHub`);
-        console.log(`   4. Generate activity by calling contract functions`);
-        console.log(`   5. Check leaderboard at https://stacks.org/builder-challenge`);
+        console.log(`   2. Share your contract addresses on GitHub`);
+        console.log(`   3. Generate activity by calling contract functions`);
+        console.log(`   4. Check leaderboard at https://stacks.org/builder-challenge`);
         
     } catch (error) {
         console.error('❌ Deployment process failed:', error);

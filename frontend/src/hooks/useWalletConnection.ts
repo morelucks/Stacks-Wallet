@@ -1,24 +1,28 @@
-import { useAppKitAccount } from '@reown/appkit/react'
-import { isStacksWalletConnected, getStacksUserData } from '../config/stacks'
-import { useState, useEffect } from 'react'
+/**
+ * Enhanced wallet connection hook with connection persistence
+ * Handles reconnection on page load and connection state recovery
+ */
+
+import { useEffect, useRef } from "react";
+import { appKit } from "../lib/appkit.instance";
 
 export function useWalletConnection() {
-    const { isConnected: isEvmConnected, address: evmAddress } = useAppKitAccount()
-    const [isStacksConnected, setIsStacksConnected] = useState(false)
-    const [stacksAddress, setStacksAddress] = useState<string | null>(null)
+  const reconnectAttemptedRef = useRef(false);
 
-    useEffect(() => {
-        const check = () => {
-            const connected = isStacksWalletConnected()
-            setIsStacksConnected(connected)
-            if (connected) {
-                setStacksAddress(getStacksUserData()?.profile?.stxAddress?.testnet || null)
-            }
-        }
-        check()
-        window.addEventListener('focus', check)
-        return () => window.removeEventListener('focus', check)
-    }, [])
+  useEffect(() => {
+    // Attempt to restore connection on mount
+    if (!reconnectAttemptedRef.current) {
+      reconnectAttemptedRef.current = true;
+      const state = appKit.getState();
+      
+      // If we have a session but no active connection, try to restore
+      if (state.session && !state.accounts?.length) {
+        // Connection will be restored automatically by AppKit
+        console.log("Attempting to restore wallet connection...");
+      }
+    }
+  }, []);
 
-    return { isEvmConnected, evmAddress, isStacksConnected, stacksAddress, isAnyConnected: isEvmConnected || isStacksConnected }
+  return { reconnectAttempted: reconnectAttemptedRef.current };
 }
+
