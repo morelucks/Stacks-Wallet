@@ -54,3 +54,7 @@ export const getStxBalance = async (address: string) => {
     const response = await fetch(`${activeStacksNetwork.coreApiUrl}/extended/v1/address/${address}/balances`);
     return response.json();
 }
+export const getSIP10Balances = async (address: string) => {
+    // Placeholder for SIP-10 token fetching
+    return []
+}
