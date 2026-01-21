@@ -25,7 +25,7 @@ export function initializeAppKit() {
             emailShowWallets: true,
             analytics: true,
             onramp: true /* Enabled */,
-            swaps: true,
+            swaps: true /* Swaps Active */,
         },
         themeMode: 'system',
         themeVariables: {
