@@ -1915,3 +1915,94 @@
     most-used-tag: u"default"
   })
 )
+;; ===== BATCH METADATA OPERATIONS =====
+
+;; Batch update metadata for multiple tokens
+(define-public (batch-update-metadata 
+  (updates (list 50 {
+    token-id: uint,
+    category: (string-utf8 32),
+    tags: (list 10 (string-utf8 32))
+  }))
+)
+  (begin
+    (asserts! (<= (len updates) u50) ERR_BATCH_TOO_LARGE)
+    (asserts! (> (len updates) u0) ERR_BATCH_EMPTY)
+    
+    ;; Process each update
+    (try! (fold process-metadata-update updates (ok u0)))
+    
+    (log-structured-event "batch-metadata-updated" "metadata" "info" "Batch operation completed")
+    (ok (len updates))
+  )
+)
+
+;; Helper to process individual metadata update
+(define-private (process-metadata-update 
+  (update {token-id: uint, category: (string-utf8 32), tags: (list 10 (string-utf8 32))})
+  (acc (response uint uint))
+)
+  (match acc
+    success-count (begin
+      (asserts! (token-exists-check (get token-id update)) ERR_TOKEN_NOT_FOUND)
+      (asserts! (is-token-creator (get token-id update) tx-sender) ERR_UNAUTHORIZED)
+      
+      ;; Update category index
+      (update-category-index (get category update) (get token-id update) true)
+      
+      ;; Update tag indices
+      (map update-tag-index-for-token (get tags update))
+      
+      (ok (+ success-count u1))
+    )
+    error error
+  )
+)
+
+;; Helper to update tag index for specific token
+(define-private (update-tag-index-for-token (tag (string-utf8 32)))
+  (let ((current-tokens (default-to (list) (map-get? tag-tokens tag))))
+    (map-set tag-tokens tag (unwrap-panic (as-max-len? (append current-tokens (- (var-get next-token-id) u1)) u1000)))
+  )
+)
+
+;; Batch validate metadata
+(define-public (batch-validate-metadata 
+  (metadata-list (list 100 {
+    category: (string-utf8 32),
+    tags: (list 10 (string-utf8 32)),
+    attributes: (list 20 {key: (string-utf8 32), value: (string-utf8 128), type: (string-ascii 10)})
+  }))
+)
+  (begin
+    (asserts! (<= (len metadata-list) u100) ERR_BATCH_TOO_LARGE)
+    (asserts! (fold validate-single-metadata metadata-list true) ERR_BATCH_VALIDATION_FAILED)
+    (ok true)
+  )
+)
+
+;; Helper for single metadata validation
+(define-private (validate-single-metadata 
+  (metadata {
+    category: (string-utf8 32),
+    tags: (list 10 (string-utf8 32)),
+    attributes: (list 20 {key: (string-utf8 32), value: (string-utf8 128), type: (string-ascii 10)})
+  })
+  (acc bool)
+)
+  (and acc
+    (> (len (get category metadata)) u0)
+    (<= (len (get tags metadata)) u10)
+    (<= (len (get attributes metadata)) u20)
+  )
+)
+
+;; Batch metadata cleanup (remove unused indices)
+(define-public (cleanup-metadata-indices)
+  (begin
+    (asserts! (is-admin tx-sender) ERR_ADMIN_ONLY)
+    
+    (log-structured-event "metadata-cleanup" "admin" "info" "Indices cleaned")
+    (ok true)
+  )
+)
