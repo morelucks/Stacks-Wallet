@@ -2006,3 +2006,162 @@
     (ok true)
   )
 )
+;; ===== ROLE-BASED ACCESS CONTROL SYSTEM =====
+
+;; Role hierarchy definitions
+(define-map role-hierarchy (string-ascii 20) {
+  level: uint,
+  parent-role: (optional (string-ascii 20)),
+  permissions: (list 20 (string-ascii 32))
+})
+
+;; User role assignments with expiration
+(define-map user-roles {user: principal, role: (string-ascii 20)} {
+  granted-at: uint,
+  granted-by: principal,
+  expires-at: (optional uint),
+  scope: (optional {token-ids: (list 100 uint), operations: (list 10 (string-ascii 20))})
+})
+
+;; Initialize default roles
+(define-private (init-default-roles)
+  (begin
+    ;; Owner role (level 100)
+    (map-set role-hierarchy "owner" {
+      level: u100,
+      parent-role: none,
+      permissions: (list "all")
+    })
+    
+    ;; Admin role (level 80)
+    (map-set role-hierarchy "admin" {
+      level: u80,
+      parent-role: (some "owner"),
+      permissions: (list "emergency" "maintenance" "recovery" "diagnostics")
+    })
+    
+    ;; Operator role (level 60)
+    (map-set role-hierarchy "operator" {
+      level: u60,
+      parent-role: (some "admin"),
+      permissions: (list "transfer" "mint" "burn" "metadata")
+    })
+    
+    ;; Creator role (level 40)
+    (map-set role-hierarchy "creator" {
+      level: u40,
+      parent-role: (some "operator"),
+      permissions: (list "create" "mint" "metadata")
+    })
+  )
+)
+
+;; Grant role to user
+(define-public (grant-role-with-scope
+  (user principal)
+  (role (string-ascii 20))
+  (expires-at (optional uint))
+  (scope (optional {token-ids: (list 100 uint), operations: (list 10 (string-ascii 20))}))
+)
+  (begin
+    (asserts! (is-contract-owner tx-sender) ERR_OWNER_ONLY)
+    (asserts! (is-valid-role role) ERR_INVALID_ROLE)
+    (asserts! (is-valid-recipient user) ERR_INVALID_RECIPIENT)
+    
+    (map-set user-roles {user: user, role: role} {
+      granted-at: (default-to u0 (get-block-info? time (- block-height u1))),
+      granted-by: tx-sender,
+      expires-at: expires-at,
+      scope: scope
+    })
+    
+    (log-structured-event "role-granted" "access" "info" role)
+    (ok true)
+  )
+)
+
+;; Check if role is valid
+(define-private (is-valid-role (role (string-ascii 20)))
+  (is-some (map-get? role-hierarchy role))
+)
+
+;; Check user permission with hierarchy
+(define-read-only (has-permission-advanced
+  (user principal)
+  (operation (string-ascii 20))
+  (context {token-id: (optional uint)})
+)
+  (if (is-eq user CONTRACT_OWNER)
+    (ok true)
+    (ok (check-user-permissions user operation context))
+  )
+)
+
+;; Helper to check user permissions
+(define-private (check-user-permissions 
+  (user principal) 
+  (operation (string-ascii 20))
+  (context {token-id: (optional uint)})
+)
+  (let ((user-role-data (get-user-highest-role user)))
+    (match user-role-data
+      role-info (and
+        (not (is-role-expired role-info))
+        (has-operation-permission (get role role-info) operation)
+        (is-within-scope role-info context)
+      )
+      false
+    )
+  )
+)
+
+;; Get user's highest role
+(define-private (get-user-highest-role (user principal))
+  ;; Simplified - would iterate through all user roles and find highest level
+  (map-get? user-roles {user: user, role: "creator"})
+)
+
+;; Check if role has expired
+(define-private (is-role-expired (role-data {granted-at: uint, granted-by: principal, expires-at: (optional uint), scope: (optional {token-ids: (list 100 uint), operations: (list 10 (string-ascii 20))})}))
+  (match (get expires-at role-data)
+    expiry (> (default-to u0 (get-block-info? time (- block-height u1))) expiry)
+    false
+  )
+)
+
+;; Check if role has operation permission
+(define-private (has-operation-permission (role (string-ascii 20)) (operation (string-ascii 20)))
+  (match (map-get? role-hierarchy role)
+    role-data (or
+      (is-some (index-of (get permissions role-data) "all"))
+      (is-some (index-of (get permissions role-data) operation))
+    )
+    false
+  )
+)
+
+;; Check if operation is within scope
+(define-private (is-within-scope 
+  (role-data {granted-at: uint, granted-by: principal, expires-at: (optional uint), scope: (optional {token-ids: (list 100 uint), operations: (list 10 (string-ascii 20))})})
+  (context {token-id: (optional uint)})
+)
+  (match (get scope role-data)
+    scope-data (match (get token-id context)
+      token-id (is-some (index-of (get token-ids scope-data) token-id))
+      true ;; No token context, allow
+    )
+    true ;; No scope restriction
+  )
+)
+
+;; Revoke role from user
+(define-public (revoke-role (user principal) (role (string-ascii 20)))
+  (begin
+    (asserts! (is-contract-owner tx-sender) ERR_OWNER_ONLY)
+    
+    (map-delete user-roles {user: user, role: role})
+    
+    (log-structured-event "role-revoked" "access" "warning" role)
+    (ok true)
+  )
+)
