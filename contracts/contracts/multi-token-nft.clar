@@ -1536,3 +1536,113 @@
     optimization-level: u85 ;; Percentage of optimization achieved
   })
 )
+
+;; ===== STATE INVARIANT PRESERVATION SYSTEM =====
+
+;; Verify balance conservation invariant
+(define-private (verify-balance-conservation (token-id uint) (expected-supply uint))
+  (let ((actual-supply (default-to u0 (map-get? token-supplies token-id))))
+    (asserts! (is-eq actual-supply expected-supply) ERR_INVARIANT_VIOLATION)
+  )
+)
+
+;; Verify supply consistency invariant
+(define-private (verify-supply-consistency (token-id uint))
+  (let (
+    (recorded-supply (default-to u0 (map-get? token-supplies token-id)))
+    (packed-supply (match (map-get? token-metadata-packed token-id)
+      packed-data (get supply packed-data)
+      u0
+    ))
+  )
+    (asserts! (is-eq recorded-supply packed-supply) ERR_STATE_CORRUPTION)
+  )
+)
+
+;; Verify permission hierarchy integrity
+(define-private (verify-permission-hierarchy (user principal))
+  (if (is-eq user CONTRACT_OWNER)
+    true
+    (match (map-get? admin-roles user)
+      admin-data (> (len (get permissions admin-data)) u0)
+      true ;; Regular users don't need special verification
+    )
+  )
+)
+
+;; Check all contract invariants
+(define-private (check-contract-invariants)
+  (begin
+    ;; Verify basic state consistency
+    (asserts! (>= (var-get next-token-id) u1) ERR_INVALID_STATE)
+    (asserts! (<= (var-get event-sequence) u1000000) ERR_STATE_CORRUPTION)
+    (asserts! (<= (var-get total-transactions) u1000000) ERR_STATE_CORRUPTION)
+    (ok true)
+  )
+)
+
+;; Verify token creation invariants
+(define-private (verify-token-creation-invariants (token-id uint) (creator principal) (supply uint))
+  (begin
+    (asserts! (is-eq token-id (- (var-get next-token-id) u1)) ERR_INVARIANT_VIOLATION)
+    (asserts! (is-eq creator tx-sender) ERR_INVARIANT_VIOLATION)
+    (asserts! (> supply u0) ERR_INVARIANT_VIOLATION)
+    (verify-supply-consistency token-id)
+  )
+)
+
+;; Verify transfer invariants
+(define-private (verify-transfer-invariants 
+  (token-id uint) 
+  (from principal) 
+  (to principal) 
+  (amount uint)
+  (from-balance-before uint)
+  (to-balance-before uint)
+)
+  (let (
+    (from-balance-after (default-to u0 (map-get? token-balances {token-id: token-id, owner: from})))
+    (to-balance-after (default-to u0 (map-get? token-balances {token-id: token-id, owner: to})))
+    (total-before (+ from-balance-before to-balance-before))
+    (total-after (+ from-balance-after to-balance-after))
+  )
+    (begin
+      ;; Balance conservation
+      (asserts! (is-eq total-before total-after) ERR_INVARIANT_VIOLATION)
+      ;; Correct balance updates
+      (asserts! (is-eq from-balance-after (- from-balance-before amount)) ERR_INVARIANT_VIOLATION)
+      (asserts! (is-eq to-balance-after (+ to-balance-before amount)) ERR_INVARIANT_VIOLATION)
+      (ok true)
+    )
+  )
+)
+
+;; Verify burn invariants
+(define-private (verify-burn-invariants 
+  (token-id uint) 
+  (amount uint) 
+  (supply-before uint) 
+  (balance-before uint)
+)
+  (let (
+    (supply-after (default-to u0 (map-get? token-supplies token-id)))
+    (balance-after (default-to u0 (map-get? token-balances {token-id: token-id, owner: tx-sender})))
+  )
+    (begin
+      ;; Supply reduction
+      (asserts! (is-eq supply-after (- supply-before amount)) ERR_INVARIANT_VIOLATION)
+      ;; Balance reduction
+      (asserts! (is-eq balance-after (- balance-before amount)) ERR_INVARIANT_VIOLATION)
+      (ok true)
+    )
+  )
+)
+
+;; Comprehensive invariant check for all operations
+(define-private (assert-invariants-preserved (operation (string-ascii 32)))
+  (begin
+    (try! (check-contract-invariants))
+    (log-structured-event "invariant-check" "system" "info" operation)
+    (ok true)
+  )
+)
