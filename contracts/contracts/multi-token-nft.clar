@@ -194,6 +194,31 @@
   last-measurement: uint
 })
 
+;; ===== EXTENDED METADATA SYSTEM =====
+
+;; Extended metadata with categories and tags
+(define-map token-metadata-extended uint {
+  category: (string-utf8 32),
+  subcategory: (optional (string-utf8 32)),
+  tags: (list 10 (string-utf8 32)),
+  attributes: (list 20 {key: (string-utf8 32), value: (string-utf8 128), type: (string-ascii 10)}),
+  created-at: uint,
+  updated-at: uint,
+  version: uint
+})
+
+;; Category index for efficient queries
+(define-map category-tokens (string-utf8 32) (list 1000 uint))
+
+;; Tag index for efficient queries  
+(define-map tag-tokens (string-utf8 32) (list 1000 uint))
+
+;; Attribute index for searchable attributes
+(define-map attribute-index {key: (string-utf8 32), value: (string-utf8 128)} (list 500 uint))
+
+;; Metadata versioning for update tracking
+(define-map metadata-versions uint (list 10 {version: uint, updated-by: principal, timestamp: uint}))
+
 ;; ===== EVENT LOGGING INFRASTRUCTURE =====
 
 ;; Event categories for filtering and organization
@@ -1644,5 +1669,102 @@
     (try! (check-contract-invariants))
     (log-structured-event "invariant-check" "system" "info" operation)
     (ok true)
+  )
+)
+
+;; ===== EXTENDED METADATA FUNCTIONS =====
+
+;; Set extended metadata for token
+(define-public (set-token-metadata-extended
+  (token-id uint)
+  (category (string-utf8 32))
+  (subcategory (optional (string-utf8 32)))
+  (tags (list 10 (string-utf8 32)))
+  (attributes (list 20 {key: (string-utf8 32), value: (string-utf8 128), type: (string-ascii 10)}))
+)
+  (begin
+    (asserts! (token-exists-check token-id) ERR_TOKEN_NOT_FOUND)
+    (asserts! (is-token-creator token-id tx-sender) ERR_UNAUTHORIZED)
+    (asserts! (> (len category) u0) ERR_INVALID_PARAMETER)
+    (asserts! (<= (len tags) u10) ERR_BATCH_TOO_LARGE)
+    (asserts! (<= (len attributes) u20) ERR_BATCH_TOO_LARGE)
+    
+    (let (
+      (current-time (default-to u0 (get-block-info? time (- block-height u1))))
+      (current-version (match (map-get? token-metadata-extended token-id)
+        existing-meta (+ (get version existing-meta) u1)
+        u1
+      ))
+    )
+      ;; Set extended metadata
+      (map-set token-metadata-extended token-id {
+        category: category,
+        subcategory: subcategory,
+        tags: tags,
+        attributes: attributes,
+        created-at: current-time,
+        updated-at: current-time,
+        version: current-version
+      })
+      
+      ;; Update category index
+      (update-category-index category token-id true)
+      
+      ;; Update tag indices
+      (map update-tag-index-helper tags)
+      
+      ;; Update attribute indices
+      (map update-attribute-index-helper attributes)
+      
+      ;; Track version history
+      (update-metadata-version token-id current-version)
+      
+      (log-structured-event "metadata-updated" "metadata" "info" category)
+      (ok true)
+    )
+  )
+)
+
+;; Helper to update category index
+(define-private (update-category-index (category (string-utf8 32)) (token-id uint) (add bool))
+  (let ((current-tokens (default-to (list) (map-get? category-tokens category))))
+    (if add
+      (if (is-none (index-of current-tokens token-id))
+        (map-set category-tokens category (unwrap-panic (as-max-len? (append current-tokens token-id) u1000)))
+        true
+      )
+      (map-set category-tokens category (filter (lambda (id) (not (is-eq id token-id))) current-tokens))
+    )
+  )
+)
+
+;; Helper to update tag index
+(define-private (update-tag-index-helper (tag (string-utf8 32)))
+  (let ((current-tokens (default-to (list) (map-get? tag-tokens tag))))
+    (map-set tag-tokens tag (unwrap-panic (as-max-len? (append current-tokens (- (var-get next-token-id) u1)) u1000)))
+  )
+)
+
+;; Helper to update attribute index
+(define-private (update-attribute-index-helper (attr {key: (string-utf8 32), value: (string-utf8 128), type: (string-ascii 10)}))
+  (let (
+    (attr-key {key: (get key attr), value: (get value attr)})
+    (current-tokens (default-to (list) (map-get? attribute-index attr-key)))
+  )
+    (map-set attribute-index attr-key (unwrap-panic (as-max-len? (append current-tokens (- (var-get next-token-id) u1)) u500)))
+  )
+)
+
+;; Update metadata version history
+(define-private (update-metadata-version (token-id uint) (version uint))
+  (let (
+    (current-versions (default-to (list) (map-get? metadata-versions token-id)))
+    (new-version-entry {
+      version: version,
+      updated-by: tx-sender,
+      timestamp: (default-to u0 (get-block-info? time (- block-height u1)))
+    })
+  )
+    (map-set metadata-versions token-id (unwrap-panic (as-max-len? (append current-versions new-version-entry) u10)))
   )
 )
