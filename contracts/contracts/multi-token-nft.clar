@@ -2633,3 +2633,172 @@
     (ok true)
   )
 )
+;; ===== ENHANCED ROYALTY CALCULATION SYSTEM =====
+
+;; Multi-recipient royalty structure
+(define-map token-royalties-enhanced uint {
+  recipients: (list 5 {recipient: principal, percentage: uint, role: (string-ascii 20)}),
+  marketplace-fee: uint,
+  total-percentage: uint,
+  created-by: principal,
+  updated-at: uint
+})
+
+;; Royalty payment tracking
+(define-map royalty-payments {token-id: uint, transaction-id: (buff 32)} {
+  sale-price: uint,
+  total-royalty: uint,
+  marketplace-fee: uint,
+  recipients: (list 5 {recipient: principal, amount: uint}),
+  paid-at: uint
+})
+
+;; Set enhanced royalty structure
+(define-public (set-token-royalties-enhanced
+  (token-id uint)
+  (recipients (list 5 {recipient: principal, percentage: uint, role: (string-ascii 20)}))
+  (marketplace-fee uint)
+)
+  (begin
+    (asserts! (token-exists-check token-id) ERR_TOKEN_NOT_FOUND)
+    (asserts! (is-token-creator token-id tx-sender) ERR_UNAUTHORIZED)
+    (asserts! (<= (len recipients) u5) ERR_BATCH_TOO_LARGE)
+    (asserts! (is-valid-royalty marketplace-fee) ERR_MARKETPLACE_FEE_INVALID)
+    
+    (let (
+      (total-percentage (+ marketplace-fee (fold sum-recipient-percentages recipients u0)))
+      (current-time (default-to u0 (get-block-info? time (- block-height u1))))
+    )
+      ;; Validate total percentage doesn't exceed 100%
+      (asserts! (<= total-percentage u10000) ERR_ROYALTY_EXCEEDED)
+      
+      ;; Validate each recipient
+      (asserts! (fold validate-recipient recipients true) ERR_RECIPIENT_INVALID)
+      
+      ;; Set enhanced royalty structure
+      (map-set token-royalties-enhanced token-id {
+        recipients: recipients,
+        marketplace-fee: marketplace-fee,
+        total-percentage: total-percentage,
+        created-by: tx-sender,
+        updated-at: current-time
+      })
+      
+      (log-structured-event "royalties-updated" "royalty" "info" "Enhanced royalties set")
+      (ok true)
+    )
+  )
+)
+
+;; Helper to sum recipient percentages
+(define-private (sum-recipient-percentages 
+  (recipient {recipient: principal, percentage: uint, role: (string-ascii 20)})
+  (acc uint)
+)
+  (+ acc (get percentage recipient))
+)
+
+;; Helper to validate recipient
+(define-private (validate-recipient 
+  (recipient {recipient: principal, percentage: uint, role: (string-ascii 20)})
+  (acc bool)
+)
+  (and acc
+    (is-valid-recipient (get recipient recipient))
+    (is-valid-royalty (get percentage recipient))
+    (> (get percentage recipient) u0)
+  )
+)
+
+;; Calculate royalties for a sale
+(define-read-only (calculate-royalties-enhanced (token-id uint) (sale-price uint))
+  (match (map-get? token-royalties-enhanced token-id)
+    royalty-data (let (
+      (marketplace-amount (/ (* sale-price (get marketplace-fee royalty-data)) u10000))
+      (recipient-amounts (map (lambda (recipient) 
+        {
+          recipient: (get recipient recipient),
+          amount: (/ (* sale-price (get percentage recipient)) u10000),
+          role: (get role recipient)
+        }
+      ) (get recipients royalty-data)))
+      (total-royalty (+ marketplace-amount (fold sum-amounts recipient-amounts u0)))
+    )
+      (ok {
+        total-royalty: total-royalty,
+        marketplace-fee: marketplace-amount,
+        recipient-payments: recipient-amounts,
+        remaining-amount: (- sale-price total-royalty)
+      })
+    )
+    (ok {
+      total-royalty: u0,
+      marketplace-fee: u0,
+      recipient-payments: (list),
+      remaining-amount: sale-price
+    })
+  )
+)
+
+;; Helper to sum payment amounts
+(define-private (sum-amounts 
+  (payment {recipient: principal, amount: uint, role: (string-ascii 20)})
+  (acc uint)
+)
+  (+ acc (get amount payment))
+)
+
+;; Process royalty payment
+(define-public (process-royalty-payment
+  (token-id uint)
+  (sale-price uint)
+  (transaction-id (buff 32))
+)
+  (begin
+    (asserts! (token-exists-check token-id) ERR_TOKEN_NOT_FOUND)
+    (asserts! (> sale-price u0) ERR_INVALID_AMOUNT)
+    
+    (let ((royalty-calc (unwrap! (calculate-royalties-enhanced token-id sale-price) ERR_FEE_CALCULATION_FAILED)))
+      ;; Record payment
+      (map-set royalty-payments {token-id: token-id, transaction-id: transaction-id} {
+        sale-price: sale-price,
+        total-royalty: (get total-royalty royalty-calc),
+        marketplace-fee: (get marketplace-fee royalty-calc),
+        recipients: (get recipient-payments royalty-calc),
+        paid-at: (default-to u0 (get-block-info? time (- block-height u1)))
+      })
+      
+      (log-structured-event "royalty-payment-processed" "royalty" "info" "Payment recorded")
+      (ok royalty-calc)
+    )
+  )
+)
+
+;; Get royalty payment history
+(define-read-only (get-royalty-payments (token-id uint) (transaction-id (buff 32)))
+  (ok (map-get? royalty-payments {token-id: token-id, transaction-id: transaction-id}))
+)
+
+;; Get token royalty structure
+(define-read-only (get-token-royalties-enhanced (token-id uint))
+  (ok (map-get? token-royalties-enhanced token-id))
+)
+
+;; Validate royalty rates
+(define-public (validate-royalty-rates (token-ids (list 50 uint)))
+  (begin
+    (asserts! (<= (len token-ids) u50) ERR_BATCH_TOO_LARGE)
+    (asserts! (fold validate-token-royalty token-ids true) ERR_ROYALTY_INVALID)
+    (ok true)
+  )
+)
+
+;; Helper to validate single token royalty
+(define-private (validate-token-royalty (token-id uint) (acc bool))
+  (and acc
+    (match (map-get? token-royalties-enhanced token-id)
+      royalty-data (<= (get total-percentage royalty-data) u10000)
+      true
+    )
+  )
+)
