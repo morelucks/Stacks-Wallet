@@ -3522,3 +3522,259 @@
   ;; Would implement actual token unlocking mechanism
   (ok true)
 )
+;; ===== TRANSFER CANCELLATION AND CLEANUP SYSTEM =====
+
+;; Cancellation tracking
+(define-map transfer-cancellations {transfer-id: (buff 32)} {
+  cancelled-by: principal,
+  cancelled-at: uint,
+  reason: (string-utf8 128),
+  refund-processed: bool,
+  cleanup-completed: bool
+})
+
+;; Cleanup queue for expired transfers
+(define-map cleanup-queue uint {
+  transfer-id: (buff 32),
+  transfer-type: (string-ascii 16),
+  scheduled-cleanup: uint,
+  priority: uint
+})
+
+;; Cancel scheduled transfer
+(define-public (cancel-scheduled-transfer 
+  (transfer-id (buff 32))
+  (reason (string-utf8 128))
+)
+  (match (map-get? scheduled-transfers {transfer-id: transfer-id})
+    transfer-data (begin
+      (asserts! (is-eq tx-sender (get from transfer-data)) ERR_UNAUTHORIZED)
+      (asserts! (is-eq (get status transfer-data) "scheduled") ERR_INVALID_STATE)
+      
+      ;; Update transfer status
+      (map-set scheduled-transfers {transfer-id: transfer-id}
+        (merge transfer-data {status: "cancelled"})
+      )
+      
+      ;; Record cancellation
+      (map-set transfer-cancellations {transfer-id: transfer-id} {
+        cancelled-by: tx-sender,
+        cancelled-at: (default-to u0 (get-block-info? time (- block-height u1))),
+        reason: reason,
+        refund-processed: false,
+        cleanup-completed: false
+      })
+      
+      ;; Process refund
+      (try! (process-transfer-refund transfer-data))
+      
+      ;; Schedule cleanup
+      (schedule-transfer-cleanup transfer-id "scheduled")
+      
+      (log-structured-event "scheduled-transfer-cancelled" "transfer" "info" reason)
+      (ok true)
+    )
+    ERR_TOKEN_NOT_FOUND
+  )
+)
+
+;; Cancel escrow transfer
+(define-public (cancel-escrow-transfer 
+  (escrow-id (buff 32))
+  (reason (string-utf8 128))
+)
+  (match (map-get? escrow-transfers {escrow-id: escrow-id})
+    escrow-data (begin
+      (asserts! (or 
+        (is-eq tx-sender (get from escrow-data))
+        (match (get arbiter escrow-data)
+          arbiter (is-eq tx-sender arbiter)
+          false
+        )
+      ) ERR_UNAUTHORIZED)
+      (asserts! (is-eq (get status escrow-data) "locked") ERR_INVALID_STATE)
+      
+      ;; Update escrow status
+      (map-set escrow-transfers {escrow-id: escrow-id}
+        (merge escrow-data {status: "cancelled"})
+      )
+      
+      ;; Record cancellation
+      (map-set transfer-cancellations {transfer-id: escrow-id} {
+        cancelled-by: tx-sender,
+        cancelled-at: (default-to u0 (get-block-info? time (- block-height u1))),
+        reason: reason,
+        refund-processed: false,
+        cleanup-completed: false
+      })
+      
+      ;; Process refund
+      (try! (process-escrow-refund escrow-data))
+      
+      ;; Schedule cleanup
+      (schedule-transfer-cleanup escrow-id "escrow")
+      
+      (log-structured-event "escrow-transfer-cancelled" "transfer" "info" reason)
+      (ok true)
+    )
+    ERR_TOKEN_NOT_FOUND
+  )
+)
+
+;; Process transfer refund
+(define-private (process-transfer-refund 
+  (transfer-data {
+    from: principal, to: principal, token-id: uint, amount: uint,
+    execute-at: uint, created-at: uint, status: (string-ascii 16), auto-execute: bool
+  })
+)
+  (begin
+    ;; Unlock tokens back to sender
+    (try! (unlock-tokens-from-transfer (get from transfer-data) (get token-id transfer-data) (get amount transfer-data)))
+    
+    ;; Mark refund as processed
+    ;; Would update cancellation record
+    
+    (ok true)
+  )
+)
+
+;; Process escrow refund
+(define-private (process-escrow-refund 
+  (escrow-data {
+    from: principal, to: principal, token-id: uint, amount: uint,
+    release-conditions: (list 5 (string-ascii 32)), arbiter: (optional principal),
+    created-at: uint, locked-until: uint, status: (string-ascii 16)
+  })
+)
+  (begin
+    ;; Unlock tokens back to sender
+    (try! (unlock-tokens-from-transfer (get from escrow-data) (get token-id escrow-data) (get amount escrow-data)))
+    
+    (ok true)
+  )
+)
+
+;; Schedule transfer cleanup
+(define-private (schedule-transfer-cleanup (transfer-id (buff 32)) (transfer-type (string-ascii 16)))
+  (let (
+    (cleanup-time (+ (default-to u0 (get-block-info? time (- block-height u1))) u3600)) ;; 1 hour delay
+    (queue-id (var-get event-sequence))
+  )
+    (map-set cleanup-queue queue-id {
+      transfer-id: transfer-id,
+      transfer-type: transfer-type,
+      scheduled-cleanup: cleanup-time,
+      priority: u1
+    })
+    
+    (var-set event-sequence (+ queue-id u1))
+  )
+)
+
+;; Execute cleanup for expired transfers
+(define-public (cleanup-expired-transfers (max-items uint))
+  (begin
+    (asserts! (is-admin tx-sender) ERR_ADMIN_ONLY)
+    (asserts! (<= max-items u50) ERR_BATCH_TOO_LARGE)
+    
+    ;; Process cleanup queue
+    (let ((cleanup-count (process-cleanup-queue max-items)))
+      (log-structured-event "expired-transfers-cleaned" "admin" "info" "Cleanup completed")
+      (ok cleanup-count)
+    )
+  )
+)
+
+;; Process cleanup queue
+(define-private (process-cleanup-queue (max-items uint))
+  ;; Simplified - would iterate through cleanup queue and process expired items
+  u0
+)
+
+;; Batch cancel multiple transfers
+(define-public (batch-cancel-transfers 
+  (cancellations (list 20 {transfer-id: (buff 32), transfer-type: (string-ascii 16), reason: (string-utf8 128)}))
+)
+  (begin
+    (asserts! (<= (len cancellations) u20) ERR_BATCH_TOO_LARGE)
+    (asserts! (> (len cancellations) u0) ERR_BATCH_EMPTY)
+    
+    (try! (fold process-single-cancellation cancellations (ok u0)))
+    
+    (log-structured-event "batch-transfers-cancelled" "transfer" "info" "Batch cancellation completed")
+    (ok (len cancellations))
+  )
+)
+
+;; Process single cancellation in batch
+(define-private (process-single-cancellation
+  (cancellation {transfer-id: (buff 32), transfer-type: (string-ascii 16), reason: (string-utf8 128)})
+  (acc (response uint uint))
+)
+  (match acc
+    success-count (begin
+      (if (is-eq (get transfer-type cancellation) "scheduled")
+        (try! (cancel-scheduled-transfer (get transfer-id cancellation) (get reason cancellation)))
+        (if (is-eq (get transfer-type cancellation) "conditional")
+          (try! (cancel-conditional-transfer (get transfer-id cancellation)))
+          (try! (cancel-escrow-transfer (get transfer-id cancellation) (get reason cancellation)))
+        )
+      )
+      (ok (+ success-count u1))
+    )
+    error error
+  )
+)
+
+;; Get cancellation details
+(define-read-only (get-cancellation-details (transfer-id (buff 32)))
+  (ok (map-get? transfer-cancellations {transfer-id: transfer-id}))
+)
+
+;; Get cleanup queue status
+(define-read-only (get-cleanup-queue-status)
+  (ok {
+    pending-items: u0, ;; Would count pending cleanup items
+    next-cleanup: u0, ;; Would get next scheduled cleanup time
+    total-processed: u0, ;; Would count total processed cleanups
+    queue-size: u0 ;; Would get current queue size
+  })
+)
+
+;; Force cleanup specific transfer
+(define-public (force-cleanup-transfer (transfer-id (buff 32)) (transfer-type (string-ascii 16)))
+  (begin
+    (asserts! (is-admin tx-sender) ERR_ADMIN_ONLY)
+    
+    ;; Perform immediate cleanup
+    (try! (execute-transfer-cleanup transfer-id transfer-type))
+    
+    (log-structured-event "transfer-force-cleaned" "admin" "info" "Manual cleanup executed")
+    (ok true)
+  )
+)
+
+;; Execute transfer cleanup
+(define-private (execute-transfer-cleanup (transfer-id (buff 32)) (transfer-type (string-ascii 16)))
+  (begin
+    ;; Clean up transfer data based on type
+    (if (is-eq transfer-type "scheduled")
+      (map-delete scheduled-transfers {transfer-id: transfer-id})
+      (if (is-eq transfer-type "conditional")
+        (map-delete conditional-transfers {transfer-id: transfer-id})
+        (map-delete escrow-transfers {escrow-id: transfer-id})
+      )
+    )
+    
+    ;; Mark cleanup as completed
+    (match (map-get? transfer-cancellations {transfer-id: transfer-id})
+      cancellation-data (map-set transfer-cancellations {transfer-id: transfer-id}
+        (merge cancellation-data {cleanup-completed: true})
+      )
+      true
+    )
+    
+    (ok true)
+  )
+)
