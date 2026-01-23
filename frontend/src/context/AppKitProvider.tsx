@@ -1,4 +1,3 @@
-
 import type { ReactNode } from 'react'
 import { WagmiProvider } from 'wagmi'
 import { QueryClientProvider } from '@tanstack/react-query'
