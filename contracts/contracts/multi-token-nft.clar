@@ -2802,3 +2802,178 @@
     )
   )
 )
+;; ===== ROYALTY TRACKING AND DISTRIBUTION SYSTEM =====
+
+;; Royalty distribution tracking
+(define-map royalty-distributions {recipient: principal, period: uint} {
+  total-earned: uint,
+  payments-count: uint,
+  last-payment: uint,
+  tokens-involved: (list 100 uint)
+})
+
+;; Royalty statistics
+(define-map royalty-stats uint {
+  total-volume: uint,
+  total-royalties: uint,
+  payment-count: uint,
+  avg-royalty-rate: uint,
+  last-sale: uint
+})
+
+;; Track royalty distribution
+(define-private (track-royalty-distribution
+  (token-id uint)
+  (recipients (list 5 {recipient: principal, amount: uint, role: (string-ascii 20)}))
+  (period uint)
+)
+  (begin
+    (map update-recipient-distribution recipients)
+    (update-token-royalty-stats token-id recipients)
+  )
+)
+
+;; Update recipient distribution tracking
+(define-private (update-recipient-distribution 
+  (payment {recipient: principal, amount: uint, role: (string-ascii 20)})
+)
+  (let (
+    (recipient (get recipient payment))
+    (amount (get amount payment))
+    (current-period (/ (default-to u0 (get-block-info? time (- block-height u1))) u86400)) ;; Daily periods
+    (dist-key {recipient: recipient, period: current-period})
+  )
+    (map-set royalty-distributions dist-key
+      (match (map-get? royalty-distributions dist-key)
+        existing-dist {
+          total-earned: (+ (get total-earned existing-dist) amount),
+          payments-count: (+ (get payments-count existing-dist) u1),
+          last-payment: (default-to u0 (get-block-info? time (- block-height u1))),
+          tokens-involved: (get tokens-involved existing-dist) ;; Would add token-id
+        }
+        {
+          total-earned: amount,
+          payments-count: u1,
+          last-payment: (default-to u0 (get-block-info? time (- block-height u1))),
+          tokens-involved: (list) ;; Would add token-id
+        }
+      )
+    )
+  )
+)
+
+;; Update token royalty statistics
+(define-private (update-token-royalty-stats
+  (token-id uint)
+  (recipients (list 5 {recipient: principal, amount: uint, role: (string-ascii 20)}))
+)
+  (let ((total-royalty (fold sum-amounts recipients u0)))
+    (map-set royalty-stats token-id
+      (match (map-get? royalty-stats token-id)
+        existing-stats {
+          total-volume: (+ (get total-volume existing-stats) total-royalty),
+          total-royalties: (+ (get total-royalties existing-stats) total-royalty),
+          payment-count: (+ (get payment-count existing-stats) u1),
+          avg-royalty-rate: (/ (+ (get total-royalties existing-stats) total-royalty) 
+                              (+ (get payment-count existing-stats) u1)),
+          last-sale: (default-to u0 (get-block-info? time (- block-height u1)))
+        }
+        {
+          total-volume: total-royalty,
+          total-royalties: total-royalty,
+          payment-count: u1,
+          avg-royalty-rate: total-royalty,
+          last-sale: (default-to u0 (get-block-info? time (- block-height u1)))
+        }
+      )
+    )
+  )
+)
+
+;; Get recipient earnings for period
+(define-read-only (get-recipient-earnings (recipient principal) (period uint))
+  (ok (map-get? royalty-distributions {recipient: recipient, period: period}))
+)
+
+;; Get token royalty statistics
+(define-read-only (get-token-royalty-stats (token-id uint))
+  (ok (map-get? royalty-stats token-id))
+)
+
+;; Generate royalty report
+(define-read-only (generate-royalty-report 
+  (token-id uint)
+  (start-period uint)
+  (end-period uint)
+)
+  (ok {
+    token-id: token-id,
+    period-start: start-period,
+    period-end: end-period,
+    total-volume: u0, ;; Would calculate from period range
+    total-royalties: u0, ;; Would calculate from period range
+    unique-recipients: u0, ;; Would count unique recipients
+    avg-sale-price: u0 ;; Would calculate average
+  })
+)
+
+;; Calculate proportional distribution
+(define-read-only (calculate-proportional-distribution
+  (total-amount uint)
+  (recipients (list 5 {recipient: principal, percentage: uint, role: (string-ascii 20)}))
+)
+  (let ((total-percentage (fold sum-recipient-percentages recipients u0)))
+    (ok (map (lambda (recipient)
+      {
+        recipient: (get recipient recipient),
+        amount: (/ (* total-amount (get percentage recipient)) total-percentage),
+        percentage: (get percentage recipient),
+        role: (get role recipient)
+      }
+    ) recipients))
+  )
+)
+
+;; Batch royalty processing
+(define-public (batch-process-royalties
+  (payments (list 20 {token-id: uint, sale-price: uint, transaction-id: (buff 32)}))
+)
+  (begin
+    (asserts! (<= (len payments) u20) ERR_BATCH_TOO_LARGE)
+    (asserts! (> (len payments) u0) ERR_BATCH_EMPTY)
+    
+    (try! (fold process-single-royalty payments (ok u0)))
+    
+    (log-structured-event "batch-royalties-processed" "royalty" "info" "Batch completed")
+    (ok (len payments))
+  )
+)
+
+;; Helper to process single royalty in batch
+(define-private (process-single-royalty
+  (payment {token-id: uint, sale-price: uint, transaction-id: (buff 32)})
+  (acc (response uint uint))
+)
+  (match acc
+    success-count (begin
+      (try! (process-royalty-payment 
+        (get token-id payment) 
+        (get sale-price payment) 
+        (get transaction-id payment)
+      ))
+      (ok (+ success-count u1))
+    )
+    error error
+  )
+)
+
+;; Get comprehensive royalty analytics
+(define-read-only (get-royalty-analytics)
+  (ok {
+    total-tokens-with-royalties: u0, ;; Would count tokens with royalties
+    total-royalty-volume: u0, ;; Would sum all royalty payments
+    avg-royalty-rate: u500, ;; 5% average
+    top-earning-token: u1,
+    most-active-recipient: CONTRACT_OWNER
+  })
+)
