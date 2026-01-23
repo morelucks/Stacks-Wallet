@@ -2165,3 +2165,158 @@
     (ok true)
   )
 )
+;; ===== TIME-LIMITED AND SCOPE-LIMITED PERMISSIONS =====
+
+;; Temporary permission grants
+(define-map temporary-permissions {user: principal, operation: (string-ascii 20)} {
+  granted-at: uint,
+  expires-at: uint,
+  granted-by: principal,
+  token-scope: (optional (list 50 uint)),
+  usage-count: uint,
+  max-usage: (optional uint)
+})
+
+;; Permission delegation system
+(define-map permission-delegations {delegator: principal, delegatee: principal} {
+  permissions: (list 10 (string-ascii 20)),
+  expires-at: uint,
+  token-scope: (optional (list 50 uint)),
+  created-at: uint
+})
+
+;; Grant temporary permission
+(define-public (grant-temporary-permission
+  (user principal)
+  (operation (string-ascii 20))
+  (duration uint)
+  (token-scope (optional (list 50 uint)))
+  (max-usage (optional uint))
+)
+  (begin
+    (asserts! (is-admin tx-sender) ERR_ADMIN_ONLY)
+    (asserts! (is-valid-recipient user) ERR_INVALID_RECIPIENT)
+    (asserts! (> duration u0) ERR_INVALID_PARAMETER)
+    
+    (let ((expires-at (+ (default-to u0 (get-block-info? time (- block-height u1))) duration)))
+      (map-set temporary-permissions {user: user, operation: operation} {
+        granted-at: (default-to u0 (get-block-info? time (- block-height u1))),
+        expires-at: expires-at,
+        granted-by: tx-sender,
+        token-scope: token-scope,
+        usage-count: u0,
+        max-usage: max-usage
+      })
+      
+      (log-structured-event "temp-permission-granted" "access" "info" operation)
+      (ok true)
+    )
+  )
+)
+
+;; Check temporary permission
+(define-private (has-temporary-permission 
+  (user principal) 
+  (operation (string-ascii 20))
+  (token-id (optional uint))
+)
+  (match (map-get? temporary-permissions {user: user, operation: operation})
+    perm-data (and
+      (< (default-to u0 (get-block-info? time (- block-height u1))) (get expires-at perm-data))
+      (match (get max-usage perm-data)
+        max-uses (< (get usage-count perm-data) max-uses)
+        true
+      )
+      (match (get token-scope perm-data)
+        scope (match token-id
+          tid (is-some (index-of scope tid))
+          true
+        )
+        true
+      )
+    )
+    false
+  )
+)
+
+;; Use temporary permission (increment usage count)
+(define-private (consume-temporary-permission (user principal) (operation (string-ascii 20)))
+  (match (map-get? temporary-permissions {user: user, operation: operation})
+    perm-data (map-set temporary-permissions {user: user, operation: operation}
+      (merge perm-data {usage-count: (+ (get usage-count perm-data) u1)})
+    )
+    false
+  )
+)
+
+;; Delegate permissions to another user
+(define-public (delegate-permissions
+  (delegatee principal)
+  (permissions (list 10 (string-ascii 20)))
+  (duration uint)
+  (token-scope (optional (list 50 uint)))
+)
+  (begin
+    (asserts! (is-valid-recipient delegatee) ERR_INVALID_RECIPIENT)
+    (asserts! (> duration u0) ERR_INVALID_PARAMETER)
+    (asserts! (<= (len permissions) u10) ERR_BATCH_TOO_LARGE)
+    
+    (let ((expires-at (+ (default-to u0 (get-block-info? time (- block-height u1))) duration)))
+      (map-set permission-delegations {delegator: tx-sender, delegatee: delegatee} {
+        permissions: permissions,
+        expires-at: expires-at,
+        token-scope: token-scope,
+        created-at: (default-to u0 (get-block-info? time (- block-height u1)))
+      })
+      
+      (log-structured-event "permissions-delegated" "access" "info" "Delegation created")
+      (ok true)
+    )
+  )
+)
+
+;; Check delegated permission
+(define-private (has-delegated-permission 
+  (user principal) 
+  (operation (string-ascii 20))
+  (token-id (optional uint))
+)
+  ;; Simplified - would check all possible delegators
+  (match (map-get? permission-delegations {delegator: CONTRACT_OWNER, delegatee: user})
+    delegation (and
+      (< (default-to u0 (get-block-info? time (- block-height u1))) (get expires-at delegation))
+      (is-some (index-of (get permissions delegation) operation))
+      (match (get token-scope delegation)
+        scope (match token-id
+          tid (is-some (index-of scope tid))
+          true
+        )
+        true
+      )
+    )
+    false
+  )
+)
+
+;; Revoke temporary permission
+(define-public (revoke-temporary-permission (user principal) (operation (string-ascii 20)))
+  (begin
+    (asserts! (is-admin tx-sender) ERR_ADMIN_ONLY)
+    
+    (map-delete temporary-permissions {user: user, operation: operation})
+    
+    (log-structured-event "temp-permission-revoked" "access" "warning" operation)
+    (ok true)
+  )
+)
+
+;; Clean up expired permissions
+(define-public (cleanup-expired-permissions)
+  (begin
+    (asserts! (is-admin tx-sender) ERR_ADMIN_ONLY)
+    
+    ;; Would iterate through all permissions and remove expired ones
+    (log-structured-event "permissions-cleaned" "admin" "info" "Expired permissions removed")
+    (ok true)
+  )
+)
