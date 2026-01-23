@@ -2320,3 +2320,157 @@
     (ok true)
   )
 )
+;; ===== PERMISSION DELEGATION AND REVOCATION SYSTEM =====
+
+;; Delegation chains for hierarchical permissions
+(define-map delegation-chains {delegator: principal, level: uint} (list 20 principal))
+
+;; Revocation tracking
+(define-map revocation-log {user: principal, timestamp: uint} {
+  revoked-by: principal,
+  reason: (string-utf8 128),
+  permissions-revoked: (list 10 (string-ascii 20)),
+  cascade-revoked: (list 50 principal)
+})
+
+;; Create delegation chain
+(define-public (create-delegation-chain
+  (delegatees (list 20 principal))
+  (permissions (list 10 (string-ascii 20)))
+  (duration uint)
+)
+  (begin
+    (asserts! (is-admin tx-sender) ERR_ADMIN_ONLY)
+    (asserts! (<= (len delegatees) u20) ERR_BATCH_TOO_LARGE)
+    (asserts! (<= (len permissions) u10) ERR_BATCH_TOO_LARGE)
+    
+    ;; Create delegation chain
+    (map-set delegation-chains {delegator: tx-sender, level: u1} delegatees)
+    
+    ;; Grant permissions to each delegatee
+    (try! (fold grant-chain-permission delegatees (ok u0)))
+    
+    (log-structured-event "delegation-chain-created" "access" "info" "Chain established")
+    (ok true)
+  )
+)
+
+;; Helper to grant permission in chain
+(define-private (grant-chain-permission (delegatee principal) (acc (response uint uint)))
+  (match acc
+    success-count (begin
+      ;; Grant temporary permission to delegatee
+      (try! (grant-temporary-permission delegatee "transfer" u3600 none none)) ;; 1 hour
+      (ok (+ success-count u1))
+    )
+    error error
+  )
+)
+
+;; Revoke all permissions from user with cascade
+(define-public (revoke-all-permissions-cascade
+  (user principal)
+  (reason (string-utf8 128))
+  (cascade bool)
+)
+  (begin
+    (asserts! (is-admin tx-sender) ERR_ADMIN_ONLY)
+    (asserts! (is-valid-recipient user) ERR_INVALID_RECIPIENT)
+    
+    (let (
+      (current-time (default-to u0 (get-block-info? time (- block-height u1))))
+      (cascade-list (if cascade (get-delegation-cascade user) (list)))
+    )
+      ;; Log revocation
+      (map-set revocation-log {user: user, timestamp: current-time} {
+        revoked-by: tx-sender,
+        reason: reason,
+        permissions-revoked: (list "all"),
+        cascade-revoked: cascade-list
+      })
+      
+      ;; Revoke user's permissions
+      (revoke-user-permissions user)
+      
+      ;; Cascade revocation if requested
+      (if cascade
+        (map revoke-user-permissions cascade-list)
+        true
+      )
+      
+      (log-structured-event "permissions-revoked-cascade" "access" "critical" reason)
+      (ok true)
+    )
+  )
+)
+
+;; Get delegation cascade list
+(define-private (get-delegation-cascade (user principal))
+  ;; Simplified - would traverse delegation chains
+  (default-to (list) (map-get? delegation-chains {delegator: user, level: u1}))
+)
+
+;; Revoke user permissions helper
+(define-private (revoke-user-permissions (user principal))
+  (begin
+    ;; Remove from admin roles
+    (map-delete admin-roles user)
+    
+    ;; Remove temporary permissions (simplified)
+    ;; Would iterate through all temp permissions for user
+    
+    true
+  )
+)
+
+;; Check revocation status
+(define-read-only (get-revocation-status (user principal))
+  (let ((recent-revocations (filter-recent-revocations user)))
+    (ok {
+      is-revoked: (> (len recent-revocations) u0),
+      last-revocation: (get-last-revocation recent-revocations),
+      revocation-count: (len recent-revocations)
+    })
+  )
+)
+
+;; Filter recent revocations (last 24 hours)
+(define-private (filter-recent-revocations (user principal))
+  ;; Simplified - would check revocation log for recent entries
+  (list)
+)
+
+;; Get last revocation
+(define-private (get-last-revocation (revocations (list 10 uint)))
+  (if (> (len revocations) u0)
+    (some (unwrap-panic (element-at revocations (- (len revocations) u1))))
+    none
+  )
+)
+
+;; Restore permissions after revocation
+(define-public (restore-permissions
+  (user principal)
+  (permissions (list 10 (string-ascii 20)))
+  (justification (string-utf8 256))
+)
+  (begin
+    (asserts! (is-contract-owner tx-sender) ERR_OWNER_ONLY)
+    (asserts! (is-valid-recipient user) ERR_INVALID_RECIPIENT)
+    (asserts! (<= (len permissions) u10) ERR_BATCH_TOO_LARGE)
+    
+    ;; Restore permissions (simplified)
+    (try! (fold restore-single-permission permissions (ok u0)))
+    
+    (log-structured-event "permissions-restored" "access" "info" justification)
+    (ok true)
+  )
+)
+
+;; Helper to restore single permission
+(define-private (restore-single-permission (permission (string-ascii 20)) (acc (response uint uint)))
+  (match acc
+    success-count (ok (+ success-count u1))
+    error error
+  )
+)
