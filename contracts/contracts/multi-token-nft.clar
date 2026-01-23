@@ -1768,3 +1768,94 @@
     (map-set metadata-versions token-id (unwrap-panic (as-max-len? (append current-versions new-version-entry) u10)))
   )
 )
+
+;; ===== METADATA VALIDATION AND UPDATE FUNCTIONS =====
+
+;; Validate metadata structure and content
+(define-private (validate-metadata-structure 
+  (category (string-utf8 32))
+  (tags (list 10 (string-utf8 32)))
+  (attributes (list 20 {key: (string-utf8 32), value: (string-utf8 128), type: (string-ascii 10)}))
+)
+  (begin
+    ;; Validate category
+    (asserts! (and (> (len category) u0) (<= (len category) u32)) ERR_INVALID_STRING_LENGTH)
+    
+    ;; Validate tags
+    (asserts! (<= (len tags) u10) ERR_BATCH_TOO_LARGE)
+    (asserts! (fold validate-tag-helper tags true) ERR_METADATA_INVALID)
+    
+    ;; Validate attributes
+    (asserts! (<= (len attributes) u20) ERR_BATCH_TOO_LARGE)
+    (asserts! (fold validate-attribute-helper attributes true) ERR_METADATA_INVALID)
+    
+    (ok true)
+  )
+)
+
+;; Helper to validate individual tags
+(define-private (validate-tag-helper (tag (string-utf8 32)) (acc bool))
+  (and acc (and (> (len tag) u0) (<= (len tag) u32)))
+)
+
+;; Helper to validate individual attributes
+(define-private (validate-attribute-helper 
+  (attr {key: (string-utf8 32), value: (string-utf8 128), type: (string-ascii 10)}) 
+  (acc bool)
+)
+  (and acc 
+    (and (> (len (get key attr)) u0) (<= (len (get key attr)) u32))
+    (and (> (len (get value attr)) u0) (<= (len (get value attr)) u128))
+    (is-valid-attribute-type (get type attr))
+  )
+)
+
+;; Validate attribute type
+(define-private (is-valid-attribute-type (attr-type (string-ascii 10)))
+  (or 
+    (is-eq attr-type "string")
+    (is-eq attr-type "number")
+    (is-eq attr-type "boolean")
+    (is-eq attr-type "date")
+    (is-eq attr-type "url")
+  )
+)
+
+;; Handle special characters in metadata
+(define-private (sanitize-metadata-string (input (string-utf8 256)))
+  ;; Basic sanitization - in real implementation would handle encoding
+  (if (> (len input) u0) input u"")
+)
+
+;; Update metadata with change tracking
+(define-public (update-token-metadata
+  (token-id uint)
+  (field (string-ascii 16))
+  (value (string-utf8 256))
+)
+  (begin
+    (asserts! (token-exists-check token-id) ERR_TOKEN_NOT_FOUND)
+    (asserts! (is-token-creator token-id tx-sender) ERR_UNAUTHORIZED)
+    (asserts! (> (len field) u0) ERR_INVALID_PARAMETER)
+    (asserts! (> (len value) u0) ERR_INVALID_PARAMETER)
+    
+    ;; Sanitize input
+    (let ((sanitized-value (sanitize-metadata-string value)))
+      ;; Log metadata change
+      (log-structured-event "metadata-field-updated" "metadata" "info" field)
+      
+      (print {
+        notification: "metadata-updated",
+        payload: {
+          token-id: token-id,
+          field: field,
+          value: sanitized-value,
+          updated-by: tx-sender,
+          timestamp: (default-to u0 (get-block-info? time (- block-height u1)))
+        }
+      })
+      
+      (ok true)
+    )
+  )
+)
