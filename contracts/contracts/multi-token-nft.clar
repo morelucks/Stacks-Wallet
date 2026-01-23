@@ -29,31 +29,103 @@
 (define-constant MAX_BATCH_SIZE u100) ;; Increased from 50 to 100
 (define-constant MAX_URI_LENGTH u256)
 
-;; ===== ERROR CODES =====
+;; ===== COMPREHENSIVE ERROR CODES =====
 
-;; Authorization errors (100-109)
+;; Authorization and Permission Errors (100-199)
 (define-constant ERR_OWNER_ONLY (err u100))
 (define-constant ERR_NOT_TOKEN_OWNER (err u101))
 (define-constant ERR_UNAUTHORIZED (err u102))
+(define-constant ERR_PERMISSION_DENIED (err u103))
+(define-constant ERR_ROLE_NOT_FOUND (err u104))
+(define-constant ERR_PERMISSION_EXPIRED (err u105))
+(define-constant ERR_INVALID_ROLE (err u106))
+(define-constant ERR_DELEGATION_FAILED (err u107))
+(define-constant ERR_REVOCATION_FAILED (err u108))
+(define-constant ERR_SCOPE_VIOLATION (err u109))
 
-;; Token operation errors (110-119)
-(define-constant ERR_TOKEN_NOT_FOUND (err u110))
-(define-constant ERR_INSUFFICIENT_BALANCE (err u111))
-(define-constant ERR_INVALID_AMOUNT (err u112))
-(define-constant ERR_SUPPLY_EXCEEDED (err u113))
+;; Token Operation Errors (200-299)
+(define-constant ERR_TOKEN_NOT_FOUND (err u200))
+(define-constant ERR_INSUFFICIENT_BALANCE (err u201))
+(define-constant ERR_INVALID_AMOUNT (err u202))
+(define-constant ERR_SUPPLY_EXCEEDED (err u203))
+(define-constant ERR_TOKEN_CREATION_FAILED (err u204))
+(define-constant ERR_MINT_FAILED (err u205))
+(define-constant ERR_BURN_FAILED (err u206))
+(define-constant ERR_TRANSFER_FAILED (err u207))
+(define-constant ERR_TOKEN_LOCKED (err u208))
+(define-constant ERR_INVALID_TOKEN_TYPE (err u209))
 
-;; Input validation errors (120-129)
-(define-constant ERR_INVALID_RECIPIENT (err u120))
-(define-constant ERR_BATCH_SIZE_MISMATCH (err u121))
-(define-constant ERR_BATCH_TOO_LARGE (err u122))
-(define-constant ERR_INVALID_URI (err u123))
+;; Validation and Input Errors (300-399)
+(define-constant ERR_INVALID_RECIPIENT (err u300))
+(define-constant ERR_BATCH_SIZE_MISMATCH (err u301))
+(define-constant ERR_BATCH_TOO_LARGE (err u302))
+(define-constant ERR_INVALID_URI (err u303))
+(define-constant ERR_INVALID_STRING_LENGTH (err u304))
+(define-constant ERR_INVALID_PARAMETER (err u305))
+(define-constant ERR_NULL_VALUE (err u306))
+(define-constant ERR_OUT_OF_BOUNDS (err u307))
+(define-constant ERR_INVALID_FORMAT (err u308))
+(define-constant ERR_ENCODING_ERROR (err u309))
 
-;; System errors (130-139)
-(define-constant ERR_CONTRACT_PAUSED (err u130))
+;; System and State Errors (400-499)
+(define-constant ERR_CONTRACT_PAUSED (err u400))
+(define-constant ERR_INVALID_STATE (err u401))
+(define-constant ERR_OPERATION_FAILED (err u402))
+(define-constant ERR_INVARIANT_VIOLATION (err u403))
+(define-constant ERR_STATE_CORRUPTION (err u404))
+(define-constant ERR_INITIALIZATION_FAILED (err u405))
+(define-constant ERR_CLEANUP_FAILED (err u406))
+(define-constant ERR_RESOURCE_EXHAUSTED (err u407))
+(define-constant ERR_TIMEOUT (err u408))
+(define-constant ERR_DEADLOCK (err u409))
 
-;; State management errors (140-149)
-(define-constant ERR_INVALID_STATE (err u140))
-(define-constant ERR_OPERATION_FAILED (err u141))
+;; Batch Operation Errors (500-599)
+(define-constant ERR_BATCH_VALIDATION_FAILED (err u500))
+(define-constant ERR_BATCH_PARTIAL_FAILURE (err u501))
+(define-constant ERR_BATCH_ROLLBACK_FAILED (err u502))
+(define-constant ERR_BATCH_SIZE_EXCEEDED (err u503))
+(define-constant ERR_BATCH_EMPTY (err u504))
+(define-constant ERR_BATCH_DUPLICATE (err u505))
+(define-constant ERR_BATCH_ORDERING (err u506))
+(define-constant ERR_BATCH_ATOMICITY (err u507))
+(define-constant ERR_BATCH_CONSISTENCY (err u508))
+(define-constant ERR_BATCH_ISOLATION (err u509))
+
+;; Metadata and Query Errors (600-699)
+(define-constant ERR_METADATA_NOT_FOUND (err u600))
+(define-constant ERR_METADATA_INVALID (err u601))
+(define-constant ERR_METADATA_TOO_LARGE (err u602))
+(define-constant ERR_CATEGORY_NOT_FOUND (err u603))
+(define-constant ERR_TAG_NOT_FOUND (err u604))
+(define-constant ERR_ATTRIBUTE_INVALID (err u605))
+(define-constant ERR_QUERY_FAILED (err u606))
+(define-constant ERR_INDEX_CORRUPTION (err u607))
+(define-constant ERR_SEARCH_FAILED (err u608))
+(define-constant ERR_FILTER_INVALID (err u609))
+
+;; Royalty and Fee Errors (700-799)
+(define-constant ERR_ROYALTY_INVALID (err u700))
+(define-constant ERR_ROYALTY_EXCEEDED (err u701))
+(define-constant ERR_FEE_CALCULATION_FAILED (err u702))
+(define-constant ERR_PAYMENT_FAILED (err u703))
+(define-constant ERR_RECIPIENT_INVALID (err u704))
+(define-constant ERR_DISTRIBUTION_FAILED (err u705))
+(define-constant ERR_PERCENTAGE_INVALID (err u706))
+(define-constant ERR_MARKETPLACE_FEE_INVALID (err u707))
+(define-constant ERR_ROYALTY_SPLIT_INVALID (err u708))
+(define-constant ERR_PAYMENT_TRACKING_FAILED (err u709))
+
+;; Administrative and Emergency Errors (800-899)
+(define-constant ERR_ADMIN_ONLY (err u800))
+(define-constant ERR_EMERGENCY_ACTIVE (err u801))
+(define-constant ERR_MAINTENANCE_MODE (err u802))
+(define-constant ERR_RECOVERY_FAILED (err u803))
+(define-constant ERR_DIAGNOSTIC_FAILED (err u804))
+(define-constant ERR_UPGRADE_FAILED (err u805))
+(define-constant ERR_BACKUP_FAILED (err u806))
+(define-constant ERR_RESTORE_FAILED (err u807))
+(define-constant ERR_MIGRATION_FAILED (err u808))
+(define-constant ERR_CONFIGURATION_INVALID (err u809))
 
 ;; ===== TOKEN DEFINITION =====
 
@@ -85,21 +157,40 @@
 (define-map token-descriptions uint (string-utf8 512)) ;; Extended descriptions
 (define-map token-royalties uint {creator: principal, percentage: uint}) ;; Royalty info
 
-;; ===== VALIDATION HELPERS =====
+;; ===== ENHANCED VALIDATION HELPERS =====
 
 ;; Check if contract is not paused
 (define-private (assert-not-paused)
   (asserts! (not (var-get contract-paused)) ERR_CONTRACT_PAUSED)
 )
 
-;; Validate token amount
+;; Comprehensive amount validation
 (define-private (is-valid-amount (amount uint))
   (and (> amount u0) (<= amount MAX_SUPPLY))
 )
 
-;; Validate principal (not contract deployer address)
+;; Enhanced principal validation
 (define-private (is-valid-recipient (recipient principal))
-  (not (is-eq recipient CONTRACT_OWNER))
+  (and 
+    (not (is-eq recipient CONTRACT_OWNER))
+    (not (is-eq recipient (as-contract tx-sender)))
+  )
+)
+
+;; Validate string length with bounds
+(define-private (is-valid-string-length (str (string-utf8 512)) (min-len uint) (max-len uint))
+  (let ((str-len (len str)))
+    (and (>= str-len min-len) (<= str-len max-len))
+  )
+)
+
+;; Validate URI format and length
+(define-private (is-valid-uri (uri (string-utf8 256)))
+  (and 
+    (> (len uri) u0) 
+    (<= (len uri) MAX_URI_LENGTH)
+    (not (is-eq uri u""))
+  )
 )
 
 ;; Check if token exists
@@ -110,6 +201,74 @@
 ;; Validate royalty percentage (0-10000 basis points = 0-100%)
 (define-private (is-valid-royalty (percentage uint))
   (<= percentage u10000)
+)
+
+;; Validate list is not empty
+(define-private (is-non-empty-list (items (list 100 uint)))
+  (> (len items) u0)
+)
+
+;; Validate batch size within limits
+(define-private (is-valid-batch-size (size uint))
+  (and (> size u0) (<= size MAX_BATCH_SIZE))
+)
+
+;; Comprehensive input validation for token creation
+(define-private (validate-token-creation-inputs 
+  (initial-supply uint) 
+  (uri (string-utf8 256)) 
+  (name (string-utf8 64))
+  (description (string-utf8 512))
+  (royalty-percentage uint)
+)
+  (begin
+    (asserts! (is-valid-amount initial-supply) ERR_INVALID_AMOUNT)
+    (asserts! (<= initial-supply MAX_SUPPLY) ERR_SUPPLY_EXCEEDED)
+    (asserts! (is-valid-uri uri) ERR_INVALID_URI)
+    (asserts! (is-valid-string-length name u1 u64) ERR_INVALID_STRING_LENGTH)
+    (asserts! (is-valid-string-length description u1 u512) ERR_INVALID_STRING_LENGTH)
+    (asserts! (is-valid-royalty royalty-percentage) ERR_ROYALTY_INVALID)
+    (ok true)
+  )
+)
+
+;; Validate transfer parameters
+(define-private (validate-transfer-params 
+  (from principal) 
+  (to principal) 
+  (token-id uint) 
+  (amount uint)
+)
+  (begin
+    (asserts! (token-exists-check token-id) ERR_TOKEN_NOT_FOUND)
+    (asserts! (is-valid-recipient to) ERR_INVALID_RECIPIENT)
+    (asserts! (is-valid-amount amount) ERR_INVALID_AMOUNT)
+    (asserts! (not (is-eq from to)) ERR_INVALID_PARAMETER)
+    (ok true)
+  )
+)
+
+;; Validate batch operation parameters
+(define-private (validate-batch-params (token-ids (list 100 uint)) (amounts (list 100 uint)))
+  (let ((ids-count (len token-ids))
+        (amounts-count (len amounts)))
+    (begin
+      (asserts! (is-eq ids-count amounts-count) ERR_BATCH_SIZE_MISMATCH)
+      (asserts! (is-valid-batch-size ids-count) ERR_BATCH_TOO_LARGE)
+      (asserts! (is-non-empty-list token-ids) ERR_BATCH_EMPTY)
+      (ok true)
+    )
+  )
+)
+
+;; Enhanced error context helper
+(define-private (create-error-context (operation (string-ascii 32)) (details (string-ascii 64)))
+  {
+    operation: operation,
+    details: details,
+    block-height: block-height,
+    timestamp: (default-to u0 (get-block-info? time (- block-height u1)))
+  }
 )
 
 ;; ===== AUTHORIZATION HELPERS =====
