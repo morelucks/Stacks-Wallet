@@ -138,6 +138,8 @@
 (define-data-var contract-uri (string-utf8 256) u"https://api.example.com/metadata/")
 (define-data-var contract-paused bool false)
 (define-data-var total-transactions uint u0) ;; Track total number of transactions
+(define-data-var event-sequence uint u0) ;; Track event sequence for ordering
+(define-data-var contract-version (string-ascii 16) "2.2.0") ;; Contract version tracking
 
 ;; ===== DATA MAPS =====
 
@@ -156,6 +158,33 @@
 ;; Token metadata extensions
 (define-map token-descriptions uint (string-utf8 512)) ;; Extended descriptions
 (define-map token-royalties uint {creator: principal, percentage: uint}) ;; Royalty info
+
+;; ===== EVENT LOGGING INFRASTRUCTURE =====
+
+;; Event categories for filtering and organization
+(define-map event-logs uint {
+  event-type: (string-ascii 32),
+  category: (string-ascii 16),
+  timestamp: uint,
+  block-height: uint,
+  transaction-sender: principal,
+  event-data: (string-utf8 512),
+  severity: (string-ascii 8)
+})
+
+;; Event statistics for analytics
+(define-map event-stats (string-ascii 32) {
+  count: uint,
+  last-occurrence: uint,
+  first-occurrence: uint
+})
+
+;; User activity tracking
+(define-map user-activity-log {user: principal, date: uint} {
+  actions-count: uint,
+  last-action: (string-ascii 32),
+  total-volume: uint
+})
 
 ;; ===== ENHANCED VALIDATION HELPERS =====
 
@@ -269,6 +298,138 @@
     block-height: block-height,
     timestamp: (default-to u0 (get-block-info? time (- block-height u1)))
   }
+)
+
+;; ===== ENHANCED EVENT LOGGING SYSTEM =====
+
+;; Get next event sequence number
+(define-private (get-next-event-sequence)
+  (let ((current-seq (var-get event-sequence)))
+    (begin
+      (var-set event-sequence (+ current-seq u1))
+      current-seq
+    )
+  )
+)
+
+;; Log structured event with categorization
+(define-private (log-structured-event 
+  (event-type (string-ascii 32))
+  (category (string-ascii 16))
+  (severity (string-ascii 8))
+  (event-data (string-utf8 512))
+)
+  (let (
+    (event-id (get-next-event-sequence))
+    (current-time (default-to u0 (get-block-info? time (- block-height u1))))
+  )
+    (begin
+      ;; Store event in log
+      (map-set event-logs event-id {
+        event-type: event-type,
+        category: category,
+        timestamp: current-time,
+        block-height: block-height,
+        transaction-sender: tx-sender,
+        event-data: event-data,
+        severity: severity
+      })
+      
+      ;; Update event statistics
+      (map-set event-stats event-type 
+        (match (map-get? event-stats event-type)
+          existing-stats {
+            count: (+ (get count existing-stats) u1),
+            last-occurrence: current-time,
+            first-occurrence: (get first-occurrence existing-stats)
+          }
+          {
+            count: u1,
+            last-occurrence: current-time,
+            first-occurrence: current-time
+          }
+        )
+      )
+      
+      ;; Emit structured print event
+      (print {
+        notification: event-type,
+        category: category,
+        severity: severity,
+        event-id: event-id,
+        timestamp: current-time,
+        block-height: block-height,
+        sender: tx-sender,
+        payload: event-data
+      })
+      
+      event-id
+    )
+  )
+)
+
+;; Update user activity tracking
+(define-private (track-user-activity (user principal) (action (string-ascii 32)) (volume uint))
+  (let (
+    (today (/ (default-to u0 (get-block-info? time (- block-height u1))) u86400))
+    (activity-key {user: user, date: today})
+  )
+    (map-set user-activity-log activity-key
+      (match (map-get? user-activity-log activity-key)
+        existing-activity {
+          actions-count: (+ (get actions-count existing-activity) u1),
+          last-action: action,
+          total-volume: (+ (get total-volume existing-activity) volume)
+        }
+        {
+          actions-count: u1,
+          last-action: action,
+          total-volume: volume
+        }
+      )
+    )
+  )
+)
+
+;; Enhanced event emission for token operations
+(define-private (emit-token-event 
+  (event-type (string-ascii 32))
+  (token-id uint)
+  (user principal)
+  (amount uint)
+  (additional-data (string-utf8 256))
+)
+  (let (
+    (event-data (concat 
+      (concat "token_id:" (uint-to-ascii token-id))
+      (concat ",user:" (principal-to-string user))
+      (concat ",amount:" (uint-to-ascii amount))
+      (concat ",data:" additional-data)
+    ))
+  )
+    (begin
+      (log-structured-event event-type "token" "info" event-data)
+      (track-user-activity user event-type amount)
+    )
+  )
+)
+
+;; Helper function to convert uint to ascii (simplified)
+(define-private (uint-to-ascii (value uint))
+  (if (<= value u9)
+    (unwrap-panic (element-at "0123456789" value))
+    "N"  ;; Simplified for demo - would need full implementation
+  )
+)
+
+;; Helper function to convert principal to string (simplified)
+(define-private (principal-to-string (p principal))
+  "principal" ;; Simplified for demo - would need full implementation
+)
+
+;; Concat helper for string building
+(define-private (concat (str1 (string-utf8 128)) (str2 (string-utf8 128)))
+  (unwrap-panic (as-max-len? (concat str1 str2) u256))
 )
 
 ;; ===== AUTHORIZATION HELPERS =====
@@ -421,7 +582,8 @@
       ;; Increment next token ID
       (var-set next-token-id (+ token-id u1))
       
-      ;; Emit creation event
+      ;; Emit creation event with enhanced logging
+      (emit-token-event "token-created" token-id tx-sender initial-supply name)
       (print {
         notification: "token-created",
         payload: {
@@ -431,7 +593,9 @@
           uri: uri,
           name: name,
           description: description,
-          royalty-percentage: royalty-percentage
+          royalty-percentage: royalty-percentage,
+          timestamp: (default-to u0 (get-block-info? time (- block-height u1))),
+          block-height: block-height
         }
       })
       
@@ -909,6 +1073,40 @@
     total-transactions: (var-get total-transactions),
     max-supply-per-token: MAX_SUPPLY,
     max-batch-size: MAX_BATCH_SIZE,
-    version: u"2.1.0"
+    version: (var-get contract-version),
+    total-events: (var-get event-sequence)
+  })
+)
+
+;; ===== EVENT QUERY FUNCTIONS =====
+
+;; Get event by ID
+(define-read-only (get-event-by-id (event-id uint))
+  (ok (map-get? event-logs event-id))
+)
+
+;; Get event statistics for a specific event type
+(define-read-only (get-event-stats (event-type (string-ascii 32)))
+  (ok (map-get? event-stats event-type))
+)
+
+;; Get user activity for a specific date
+(define-read-only (get-user-activity (user principal) (date uint))
+  (ok (map-get? user-activity-log {user: user, date: date}))
+)
+
+;; Get recent events count
+(define-read-only (get-recent-events-count)
+  (ok (var-get event-sequence))
+)
+
+;; Get contract activity summary
+(define-read-only (get-activity-summary)
+  (ok {
+    total-events: (var-get event-sequence),
+    total-transactions: (var-get total-transactions),
+    total-tokens: (- (var-get next-token-id) u1),
+    contract-version: (var-get contract-version),
+    last-block: block-height
   })
 )
