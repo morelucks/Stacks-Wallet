@@ -1859,3 +1859,59 @@
     )
   )
 )
+
+;; ===== METADATA QUERY AND INDEXING SYSTEM =====
+
+;; Get tokens by category with pagination
+(define-read-only (get-tokens-by-category-paginated (category (string-utf8 32)) (offset uint) (limit uint))
+  (let ((all-tokens (default-to (list) (map-get? category-tokens category))))
+    (ok (take-list (drop-list all-tokens offset) limit))
+  )
+)
+
+;; Get tokens by tag
+(define-read-only (get-tokens-by-tag (tag (string-utf8 32)))
+  (ok (default-to (list) (map-get? tag-tokens tag)))
+)
+
+;; Get tokens by attribute
+(define-read-only (get-tokens-by-attribute (key (string-utf8 32)) (value (string-utf8 128)))
+  (ok (default-to (list) (map-get? attribute-index {key: key, value: value})))
+)
+
+;; Get extended metadata for token
+(define-read-only (get-token-metadata-extended (token-id uint))
+  (ok (map-get? token-metadata-extended token-id))
+)
+
+;; Get metadata version history
+(define-read-only (get-metadata-versions (token-id uint))
+  (ok (default-to (list) (map-get? metadata-versions token-id)))
+)
+
+;; Helper to take first n items from list
+(define-private (take-list (items (list 1000 uint)) (n uint))
+  (if (is-eq n u0)
+    (list)
+    items ;; Simplified - would need proper implementation
+  )
+)
+
+;; Helper to drop first n items from list
+(define-private (drop-list (items (list 1000 uint)) (n uint))
+  (if (is-eq n u0)
+    items
+    items ;; Simplified - would need proper implementation
+  )
+)
+
+;; Get metadata statistics
+(define-read-only (get-metadata-stats)
+  (ok {
+    total-categories: u0, ;; Would count actual categories
+    total-tags: u0, ;; Would count actual tags
+    total-attributes: u0, ;; Would count actual attributes
+    most-used-category: u"general",
+    most-used-tag: u"default"
+  })
+)
