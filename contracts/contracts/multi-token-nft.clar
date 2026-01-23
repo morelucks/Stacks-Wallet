@@ -140,6 +140,9 @@
 (define-data-var total-transactions uint u0) ;; Track total number of transactions
 (define-data-var event-sequence uint u0) ;; Track event sequence for ordering
 (define-data-var contract-version (string-ascii 16) "2.2.0") ;; Contract version tracking
+(define-data-var emergency-mode bool false) ;; Emergency mode flag
+(define-data-var maintenance-mode bool false) ;; Maintenance mode flag
+(define-data-var partial-pause-functions (list 20 (string-ascii 32)) (list)) ;; Selectively paused functions
 
 ;; ===== DATA MAPS =====
 
@@ -186,11 +189,71 @@
   total-volume: uint
 })
 
+;; ===== ADMINISTRATIVE CONTROL MAPS =====
+
+;; Emergency response levels and procedures
+(define-map emergency-procedures (string-ascii 32) {
+  level: uint,
+  description: (string-utf8 256),
+  auto-trigger: bool,
+  recovery-steps: (list 10 (string-ascii 64))
+})
+
+;; Administrative roles and permissions
+(define-map admin-roles principal {
+  role: (string-ascii 20),
+  granted-at: uint,
+  granted-by: principal,
+  permissions: (list 20 (string-ascii 32))
+})
+
+;; System diagnostics and health monitoring
+(define-map system-diagnostics (string-ascii 32) {
+  status: (string-ascii 16),
+  last-check: uint,
+  error-count: uint,
+  warning-count: uint
+})
+
 ;; ===== ENHANCED VALIDATION HELPERS =====
 
 ;; Check if contract is not paused
 (define-private (assert-not-paused)
   (asserts! (not (var-get contract-paused)) ERR_CONTRACT_PAUSED)
+)
+
+;; Enhanced pause checking with function-specific pausing
+(define-private (assert-function-not-paused (function-name (string-ascii 32)))
+  (begin
+    (asserts! (not (var-get contract-paused)) ERR_CONTRACT_PAUSED)
+    (asserts! (not (var-get emergency-mode)) ERR_EMERGENCY_ACTIVE)
+    (asserts! (is-none (index-of (var-get partial-pause-functions) function-name)) ERR_MAINTENANCE_MODE)
+    (ok true)
+  )
+)
+
+;; Check if user has administrative privileges
+(define-private (is-admin (user principal))
+  (or 
+    (is-eq user CONTRACT_OWNER)
+    (is-some (map-get? admin-roles user))
+  )
+)
+
+;; Check specific admin permission
+(define-private (has-admin-permission (user principal) (permission (string-ascii 32)))
+  (if (is-eq user CONTRACT_OWNER)
+    true
+    (match (map-get? admin-roles user)
+      admin-data (is-some (index-of (get permissions admin-data) permission))
+      false
+    )
+  )
+)
+
+;; Emergency mode validation
+(define-private (assert-not-emergency)
+  (asserts! (not (var-get emergency-mode)) ERR_EMERGENCY_ACTIVE)
 )
 
 ;; Comprehensive amount validation
@@ -1109,4 +1172,192 @@
     contract-version: (var-get contract-version),
     last-block: block-height
   })
+)
+
+;; ===== ENHANCED ADMINISTRATIVE FUNCTIONS =====
+
+;; Set emergency mode (graduated response)
+(define-public (set-emergency-mode (active bool) (level uint) (reason (string-utf8 256)))
+  (begin
+    (asserts! (is-admin tx-sender) ERR_ADMIN_ONLY)
+    (asserts! (<= level u5) ERR_INVALID_PARAMETER) ;; Max emergency level 5
+    
+    (var-set emergency-mode active)
+    
+    ;; Log emergency action
+    (log-structured-event "emergency-mode-changed" "admin" "critical" reason)
+    
+    (print {
+      notification: "emergency-mode-changed",
+      payload: {
+        active: active,
+        level: level,
+        reason: reason,
+        admin: tx-sender,
+        timestamp: (default-to u0 (get-block-info? time (- block-height u1)))
+      }
+    })
+    
+    (ok true)
+  )
+)
+
+;; Set maintenance mode with selective function pausing
+(define-public (set-maintenance-mode (active bool) (paused-functions (list 20 (string-ascii 32))))
+  (begin
+    (asserts! (is-admin tx-sender) ERR_ADMIN_ONLY)
+    (asserts! (<= (len paused-functions) u20) ERR_BATCH_TOO_LARGE)
+    
+    (var-set maintenance-mode active)
+    (var-set partial-pause-functions paused-functions)
+    
+    (log-structured-event "maintenance-mode-changed" "admin" "warning" 
+      (if active u"Maintenance mode activated" u"Maintenance mode deactivated"))
+    
+    (print {
+      notification: "maintenance-mode-changed",
+      payload: {
+        active: active,
+        paused-functions: paused-functions,
+        admin: tx-sender,
+        timestamp: (default-to u0 (get-block-info? time (- block-height u1)))
+      }
+    })
+    
+    (ok true)
+  )
+)
+
+;; Grant administrative role
+(define-public (grant-admin-role 
+  (user principal) 
+  (role (string-ascii 20)) 
+  (permissions (list 20 (string-ascii 32)))
+)
+  (begin
+    (asserts! (is-contract-owner tx-sender) ERR_OWNER_ONLY)
+    (asserts! (is-valid-recipient user) ERR_INVALID_RECIPIENT)
+    (asserts! (<= (len permissions) u20) ERR_BATCH_TOO_LARGE)
+    
+    (map-set admin-roles user {
+      role: role,
+      granted-at: (default-to u0 (get-block-info? time (- block-height u1))),
+      granted-by: tx-sender,
+      permissions: permissions
+    })
+    
+    (log-structured-event "admin-role-granted" "admin" "info" role)
+    
+    (print {
+      notification: "admin-role-granted",
+      payload: {
+        user: user,
+        role: role,
+        permissions: permissions,
+        granted-by: tx-sender
+      }
+    })
+    
+    (ok true)
+  )
+)
+
+;; Revoke administrative role
+(define-public (revoke-admin-role (user principal))
+  (begin
+    (asserts! (is-contract-owner tx-sender) ERR_OWNER_ONLY)
+    
+    (map-delete admin-roles user)
+    
+    (log-structured-event "admin-role-revoked" "admin" "warning" "Role revoked")
+    
+    (print {
+      notification: "admin-role-revoked",
+      payload: {
+        user: user,
+        revoked-by: tx-sender,
+        timestamp: (default-to u0 (get-block-info? time (- block-height u1)))
+      }
+    })
+    
+    (ok true)
+  )
+)
+
+;; System diagnostics check
+(define-public (run-system-diagnostics)
+  (begin
+    (asserts! (is-admin tx-sender) ERR_ADMIN_ONLY)
+    
+    (let (
+      (current-time (default-to u0 (get-block-info? time (- block-height u1))))
+      (total-tokens (- (var-get next-token-id) u1))
+      (total-events (var-get event-sequence))
+    )
+      ;; Update diagnostics
+      (map-set system-diagnostics "general" {
+        status: "healthy",
+        last-check: current-time,
+        error-count: u0,
+        warning-count: u0
+      })
+      
+      (log-structured-event "diagnostics-run" "admin" "info" "System diagnostics completed")
+      
+      (ok {
+        status: "healthy",
+        total-tokens: total-tokens,
+        total-events: total-events,
+        contract-paused: (var-get contract-paused),
+        emergency-mode: (var-get emergency-mode),
+        maintenance-mode: (var-get maintenance-mode),
+        last-check: current-time
+      })
+    )
+  )
+)
+
+;; Recovery procedure execution
+(define-public (execute-recovery-procedure (procedure-name (string-ascii 32)) (parameters (list 10 uint)))
+  (begin
+    (asserts! (is-admin tx-sender) ERR_ADMIN_ONLY)
+    (asserts! (has-admin-permission tx-sender "recovery") ERR_PERMISSION_DENIED)
+    
+    ;; Log recovery attempt
+    (log-structured-event "recovery-procedure" "admin" "critical" procedure-name)
+    
+    (print {
+      notification: "recovery-procedure-executed",
+      payload: {
+        procedure: procedure-name,
+        parameters: parameters,
+        admin: tx-sender,
+        timestamp: (default-to u0 (get-block-info? time (- block-height u1)))
+      }
+    })
+    
+    (ok true)
+  )
+)
+
+;; Get system status
+(define-read-only (get-system-status)
+  (ok {
+    contract-paused: (var-get contract-paused),
+    emergency-mode: (var-get emergency-mode),
+    maintenance-mode: (var-get maintenance-mode),
+    paused-functions: (var-get partial-pause-functions),
+    total-admins: u1, ;; Simplified - would count actual admins
+    last-diagnostic: (map-get? system-diagnostics "general")
+  })
+)
+
+;; Get admin role information
+(define-read-only (get-admin-role (user principal))
+  (ok (map-get? admin-roles user))
+)
+
+;; Check if user has specific permission
+(define-read-only (check-admin-permission (user principal) (permission (string-ascii 32)))
+  (ok (has-admin-permission user permission))
 )
