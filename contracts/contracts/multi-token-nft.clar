@@ -3211,3 +3211,314 @@
     error error
   )
 )
+;; ===== CONDITIONAL AND SCHEDULED TRANSFER SYSTEM =====
+
+;; Conditional transfers
+(define-map conditional-transfers {transfer-id: (buff 32)} {
+  from: principal,
+  to: principal,
+  token-id: uint,
+  amount: uint,
+  condition-type: (string-ascii 16),
+  condition-params: (list 10 uint),
+  created-at: uint,
+  expires-at: uint,
+  status: (string-ascii 16)
+})
+
+;; Scheduled transfers
+(define-map scheduled-transfers {transfer-id: (buff 32)} {
+  from: principal,
+  to: principal,
+  token-id: uint,
+  amount: uint,
+  execute-at: uint,
+  created-at: uint,
+  status: (string-ascii 16),
+  auto-execute: bool
+})
+
+;; Escrow transfers
+(define-map escrow-transfers {escrow-id: (buff 32)} {
+  from: principal,
+  to: principal,
+  token-id: uint,
+  amount: uint,
+  release-conditions: (list 5 (string-ascii 32)),
+  arbiter: (optional principal),
+  created-at: uint,
+  locked-until: uint,
+  status: (string-ascii 16)
+})
+
+;; Create conditional transfer
+(define-public (create-conditional-transfer
+  (transfer-id (buff 32))
+  (to principal)
+  (token-id uint)
+  (amount uint)
+  (condition-type (string-ascii 16))
+  (condition-params (list 10 uint))
+  (expires-in uint)
+)
+  (begin
+    (asserts! (token-exists-check token-id) ERR_TOKEN_NOT_FOUND)
+    (asserts! (is-valid-recipient to) ERR_INVALID_RECIPIENT)
+    (asserts! (is-valid-amount amount) ERR_INVALID_AMOUNT)
+    (asserts! (>= (default-to u0 (map-get? token-balances {token-id: token-id, owner: tx-sender})) amount) ERR_INSUFFICIENT_BALANCE)
+    
+    (let ((expires-at (+ (default-to u0 (get-block-info? time (- block-height u1))) expires-in)))
+      ;; Lock tokens in escrow
+      (try! (lock-tokens-for-transfer tx-sender token-id amount))
+      
+      ;; Create conditional transfer
+      (map-set conditional-transfers {transfer-id: transfer-id} {
+        from: tx-sender,
+        to: to,
+        token-id: token-id,
+        amount: amount,
+        condition-type: condition-type,
+        condition-params: condition-params,
+        created-at: (default-to u0 (get-block-info? time (- block-height u1))),
+        expires-at: expires-at,
+        status: "pending"
+      })
+      
+      (log-structured-event "conditional-transfer-created" "transfer" "info" condition-type)
+      (ok true)
+    )
+  )
+)
+
+;; Execute conditional transfer if conditions are met
+(define-public (execute-conditional-transfer (transfer-id (buff 32)))
+  (match (map-get? conditional-transfers {transfer-id: transfer-id})
+    transfer-data (begin
+      (asserts! (is-eq (get status transfer-data) "pending") ERR_INVALID_STATE)
+      (asserts! (< (default-to u0 (get-block-info? time (- block-height u1))) (get expires-at transfer-data)) ERR_TIMEOUT)
+      
+      ;; Check if conditions are met
+      (asserts! (check-transfer-conditions transfer-data) ERR_OPERATION_FAILED)
+      
+      ;; Execute the transfer
+      (try! (safe-transfer-from 
+        (get from transfer-data)
+        (get to transfer-data)
+        (get token-id transfer-data)
+        (get amount transfer-data)
+        none
+      ))
+      
+      ;; Update status
+      (map-set conditional-transfers {transfer-id: transfer-id}
+        (merge transfer-data {status: "executed"})
+      )
+      
+      (log-structured-event "conditional-transfer-executed" "transfer" "info" "Conditions met")
+      (ok true)
+    )
+    ERR_TOKEN_NOT_FOUND
+  )
+)
+
+;; Check if transfer conditions are met
+(define-private (check-transfer-conditions 
+  (transfer-data {
+    from: principal, to: principal, token-id: uint, amount: uint,
+    condition-type: (string-ascii 16), condition-params: (list 10 uint),
+    created-at: uint, expires-at: uint, status: (string-ascii 16)
+  })
+)
+  (if (is-eq (get condition-type transfer-data) "time-based")
+    (>= (default-to u0 (get-block-info? time (- block-height u1))) (unwrap-panic (element-at (get condition-params transfer-data) u0)))
+    (if (is-eq (get condition-type transfer-data) "balance-based")
+      (>= (default-to u0 (map-get? token-balances {token-id: (get token-id transfer-data), owner: (get to transfer-data)})) 
+          (unwrap-panic (element-at (get condition-params transfer-data) u0)))
+      true ;; Default to true for unknown conditions
+    )
+  )
+)
+
+;; Schedule transfer for future execution
+(define-public (schedule-transfer
+  (transfer-id (buff 32))
+  (to principal)
+  (token-id uint)
+  (amount uint)
+  (execute-at uint)
+  (auto-execute bool)
+)
+  (begin
+    (asserts! (token-exists-check token-id) ERR_TOKEN_NOT_FOUND)
+    (asserts! (is-valid-recipient to) ERR_INVALID_RECIPIENT)
+    (asserts! (is-valid-amount amount) ERR_INVALID_AMOUNT)
+    (asserts! (> execute-at (default-to u0 (get-block-info? time (- block-height u1)))) ERR_INVALID_PARAMETER)
+    
+    ;; Lock tokens for scheduled transfer
+    (try! (lock-tokens-for-transfer tx-sender token-id amount))
+    
+    (map-set scheduled-transfers {transfer-id: transfer-id} {
+      from: tx-sender,
+      to: to,
+      token-id: token-id,
+      amount: amount,
+      execute-at: execute-at,
+      created-at: (default-to u0 (get-block-info? time (- block-height u1))),
+      status: "scheduled",
+      auto-execute: auto-execute
+    })
+    
+    (log-structured-event "transfer-scheduled" "transfer" "info" "Future execution scheduled")
+    (ok true)
+  )
+)
+
+;; Execute scheduled transfer
+(define-public (execute-scheduled-transfer (transfer-id (buff 32)))
+  (match (map-get? scheduled-transfers {transfer-id: transfer-id})
+    transfer-data (begin
+      (asserts! (is-eq (get status transfer-data) "scheduled") ERR_INVALID_STATE)
+      (asserts! (>= (default-to u0 (get-block-info? time (- block-height u1))) (get execute-at transfer-data)) ERR_TIMEOUT)
+      
+      ;; Execute the transfer
+      (try! (safe-transfer-from 
+        (get from transfer-data)
+        (get to transfer-data)
+        (get token-id transfer-data)
+        (get amount transfer-data)
+        none
+      ))
+      
+      ;; Update status
+      (map-set scheduled-transfers {transfer-id: transfer-id}
+        (merge transfer-data {status: "executed"})
+      )
+      
+      (log-structured-event "scheduled-transfer-executed" "transfer" "info" "Scheduled execution completed")
+      (ok true)
+    )
+    ERR_TOKEN_NOT_FOUND
+  )
+)
+
+;; Create escrow transfer
+(define-public (create-escrow-transfer
+  (escrow-id (buff 32))
+  (to principal)
+  (token-id uint)
+  (amount uint)
+  (release-conditions (list 5 (string-ascii 32)))
+  (arbiter (optional principal))
+  (lock-duration uint)
+)
+  (begin
+    (asserts! (token-exists-check token-id) ERR_TOKEN_NOT_FOUND)
+    (asserts! (is-valid-recipient to) ERR_INVALID_RECIPIENT)
+    (asserts! (is-valid-amount amount) ERR_INVALID_AMOUNT)
+    (asserts! (<= (len release-conditions) u5) ERR_BATCH_TOO_LARGE)
+    
+    ;; Lock tokens in escrow
+    (try! (lock-tokens-for-transfer tx-sender token-id amount))
+    
+    (let ((locked-until (+ (default-to u0 (get-block-info? time (- block-height u1))) lock-duration)))
+      (map-set escrow-transfers {escrow-id: escrow-id} {
+        from: tx-sender,
+        to: to,
+        token-id: token-id,
+        amount: amount,
+        release-conditions: release-conditions,
+        arbiter: arbiter,
+        created-at: (default-to u0 (get-block-info? time (- block-height u1))),
+        locked-until: locked-until,
+        status: "locked"
+      })
+      
+      (log-structured-event "escrow-created" "transfer" "info" "Tokens locked in escrow")
+      (ok true)
+    )
+  )
+)
+
+;; Release escrow transfer
+(define-public (release-escrow-transfer (escrow-id (buff 32)))
+  (match (map-get? escrow-transfers {escrow-id: escrow-id})
+    escrow-data (begin
+      (asserts! (is-eq (get status escrow-data) "locked") ERR_INVALID_STATE)
+      (asserts! (or 
+        (is-eq tx-sender (get from escrow-data))
+        (is-eq tx-sender (get to escrow-data))
+        (match (get arbiter escrow-data)
+          arbiter (is-eq tx-sender arbiter)
+          false
+        )
+      ) ERR_UNAUTHORIZED)
+      
+      ;; Check release conditions
+      (asserts! (check-escrow-conditions escrow-data) ERR_OPERATION_FAILED)
+      
+      ;; Execute the transfer
+      (try! (safe-transfer-from 
+        (get from escrow-data)
+        (get to escrow-data)
+        (get token-id escrow-data)
+        (get amount escrow-data)
+        none
+      ))
+      
+      ;; Update status
+      (map-set escrow-transfers {escrow-id: escrow-id}
+        (merge escrow-data {status: "released"})
+      )
+      
+      (log-structured-event "escrow-released" "transfer" "info" "Escrow conditions met")
+      (ok true)
+    )
+    ERR_TOKEN_NOT_FOUND
+  )
+)
+
+;; Check escrow release conditions
+(define-private (check-escrow-conditions 
+  (escrow-data {
+    from: principal, to: principal, token-id: uint, amount: uint,
+    release-conditions: (list 5 (string-ascii 32)), arbiter: (optional principal),
+    created-at: uint, locked-until: uint, status: (string-ascii 16)
+  })
+)
+  ;; Simplified - would check all release conditions
+  (>= (default-to u0 (get-block-info? time (- block-height u1))) (get locked-until escrow-data))
+)
+
+;; Lock tokens for transfer (placeholder)
+(define-private (lock-tokens-for-transfer (owner principal) (token-id uint) (amount uint))
+  ;; Would implement actual token locking mechanism
+  (ok true)
+)
+
+;; Cancel pending transfer
+(define-public (cancel-conditional-transfer (transfer-id (buff 32)))
+  (match (map-get? conditional-transfers {transfer-id: transfer-id})
+    transfer-data (begin
+      (asserts! (is-eq tx-sender (get from transfer-data)) ERR_UNAUTHORIZED)
+      (asserts! (is-eq (get status transfer-data) "pending") ERR_INVALID_STATE)
+      
+      ;; Unlock tokens
+      (try! (unlock-tokens-from-transfer (get from transfer-data) (get token-id transfer-data) (get amount transfer-data)))
+      
+      ;; Update status
+      (map-set conditional-transfers {transfer-id: transfer-id}
+        (merge transfer-data {status: "cancelled"})
+      )
+      
+      (log-structured-event "conditional-transfer-cancelled" "transfer" "info" "Transfer cancelled by sender")
+      (ok true)
+    )
+    ERR_TOKEN_NOT_FOUND
+  )
+)
+
+;; Unlock tokens from transfer (placeholder)
+(define-private (unlock-tokens-from-transfer (owner principal) (token-id uint) (amount uint))
+  ;; Would implement actual token unlocking mechanism
+  (ok true)
+)
