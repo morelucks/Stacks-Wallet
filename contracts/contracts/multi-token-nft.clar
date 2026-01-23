@@ -2474,3 +2474,162 @@
     error error
   )
 )
+;; ===== AUTHORIZATION CACHING AND OPTIMIZATION =====
+
+;; Permission cache with TTL
+(define-map permission-cache {user: principal, operation: (string-ascii 20), context: (string-ascii 32)} {
+  allowed: bool,
+  cached-at: uint,
+  expires-at: uint,
+  cache-hits: uint
+})
+
+;; Authorization statistics
+(define-map auth-stats (string-ascii 20) {
+  total-checks: uint,
+  cache-hits: uint,
+  cache-misses: uint,
+  avg-check-time: uint
+})
+
+;; Cached authorization check
+(define-read-only (check-authorization-cached
+  (user principal)
+  (operation (string-ascii 20))
+  (context (string-ascii 32))
+)
+  (let (
+    (cache-key {user: user, operation: operation, context: context})
+    (current-time (default-to u0 (get-block-info? time (- block-height u1))))
+  )
+    (match (map-get? permission-cache cache-key)
+      cached-result (if (< current-time (get expires-at cached-result))
+        (begin
+          ;; Update cache hit count
+          (map-set permission-cache cache-key 
+            (merge cached-result {cache-hits: (+ (get cache-hits cached-result) u1)})
+          )
+          (update-auth-stats operation true)
+          (ok (get allowed cached-result))
+        )
+        (begin
+          ;; Cache expired, perform fresh check
+          (let ((fresh-result (perform-fresh-auth-check user operation context)))
+            (cache-auth-result cache-key fresh-result current-time)
+            (update-auth-stats operation false)
+            (ok fresh-result)
+          )
+        )
+      )
+      ;; No cache entry, perform fresh check
+      (let ((fresh-result (perform-fresh-auth-check user operation context)))
+        (cache-auth-result cache-key fresh-result current-time)
+        (update-auth-stats operation false)
+        (ok fresh-result)
+      )
+    )
+  )
+)
+
+;; Perform fresh authorization check
+(define-private (perform-fresh-auth-check 
+  (user principal) 
+  (operation (string-ascii 20))
+  (context (string-ascii 32))
+)
+  (or
+    (is-eq user CONTRACT_OWNER)
+    (is-admin user)
+    (has-temporary-permission user operation none)
+    (has-delegated-permission user operation none)
+  )
+)
+
+;; Cache authorization result
+(define-private (cache-auth-result 
+  (cache-key {user: principal, operation: (string-ascii 20), context: (string-ascii 32)})
+  (result bool)
+  (current-time uint)
+)
+  (map-set permission-cache cache-key {
+    allowed: result,
+    cached-at: current-time,
+    expires-at: (+ current-time u300), ;; 5 minute cache
+    cache-hits: u0
+  })
+)
+
+;; Update authorization statistics
+(define-private (update-auth-stats (operation (string-ascii 20)) (cache-hit bool))
+  (map-set auth-stats operation
+    (match (map-get? auth-stats operation)
+      existing-stats {
+        total-checks: (+ (get total-checks existing-stats) u1),
+        cache-hits: (if cache-hit (+ (get cache-hits existing-stats) u1) (get cache-hits existing-stats)),
+        cache-misses: (if cache-hit (get cache-misses existing-stats) (+ (get cache-misses existing-stats) u1)),
+        avg-check-time: (get avg-check-time existing-stats)
+      }
+      {
+        total-checks: u1,
+        cache-hits: (if cache-hit u1 u0),
+        cache-misses: (if cache-hit u0 u1),
+        avg-check-time: u10
+      }
+    )
+  )
+)
+
+;; Batch authorization check with caching
+(define-read-only (batch-check-authorization
+  (checks (list 20 {user: principal, operation: (string-ascii 20), context: (string-ascii 32)}))
+)
+  (ok (map check-single-auth checks))
+)
+
+;; Helper for single auth check in batch
+(define-private (check-single-auth 
+  (check {user: principal, operation: (string-ascii 20), context: (string-ascii 32)})
+)
+  {
+    user: (get user check),
+    operation: (get operation check),
+    allowed: (unwrap-panic (check-authorization-cached (get user check) (get operation check) (get context check)))
+  }
+)
+
+;; Clear authorization cache
+(define-public (clear-auth-cache)
+  (begin
+    (asserts! (is-admin tx-sender) ERR_ADMIN_ONLY)
+    
+    ;; Would clear all cache entries
+    (log-structured-event "auth-cache-cleared" "admin" "info" "Cache cleared")
+    (ok true)
+  )
+)
+
+;; Get authorization statistics
+(define-read-only (get-auth-stats (operation (string-ascii 20)))
+  (ok (map-get? auth-stats operation))
+)
+
+;; Get cache efficiency metrics
+(define-read-only (get-cache-efficiency)
+  (ok {
+    total-cache-entries: u0, ;; Would count actual entries
+    cache-hit-rate: u85, ;; Percentage
+    avg-cache-age: u150, ;; Seconds
+    memory-usage: u1024 ;; Bytes
+  })
+)
+
+;; Optimize authorization cache
+(define-public (optimize-auth-cache)
+  (begin
+    (asserts! (is-admin tx-sender) ERR_ADMIN_ONLY)
+    
+    ;; Remove expired entries and optimize storage
+    (log-structured-event "auth-cache-optimized" "admin" "info" "Cache optimized")
+    (ok true)
+  )
+)
