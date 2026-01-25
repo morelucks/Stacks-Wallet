@@ -675,3 +675,45 @@ describe('NFT Contract - Error Handling', () => {
     expect(transferError.isErr()).toBe(true);
     expectEqual(transferError.value, Cl.error(uint(101)));
   });
+  it('should maintain error consistency across functions', () => {
+    // Test ERR-OWNER-ONLY consistency
+    const mint1 = simnet.callPublicFn('nft-contract', 'mint', [principal(user1)], user1);
+    const mint2 = simnet.callPublicFn('nft-contract', 'mint', [principal(user2)], user2);
+
+    expect(mint1.isErr()).toBe(true);
+    expect(mint2.isErr()).toBe(true);
+    expectEqual(mint1.value, Cl.error(uint(100)));
+    expectEqual(mint2.value, Cl.error(uint(100)));
+
+    // Mint a token for transfer error tests
+    simnet.callPublicFn('nft-contract', 'mint', [principal(user1)], deployer);
+
+    // Test ERR-NOT-TOKEN-OWNER consistency
+    const transfer1 = simnet.callPublicFn('nft-contract', 'transfer', [uint(1), principal(user1), principal(user2)], user2);
+    const transfer2 = simnet.callPublicFn('nft-contract', 'transfer', [uint(1), principal(user1), principal(deployer)], deployer);
+
+    expect(transfer1.isErr()).toBe(true);
+    expect(transfer2.isErr()).toBe(true);
+    expectEqual(transfer1.value, Cl.error(uint(101)));
+    expectEqual(transfer2.value, Cl.error(uint(101)));
+  });
+
+  it('should preserve state after error conditions', () => {
+    // Check initial state
+    let lastTokenId = simnet.callReadOnlyFn('nft-contract', 'get-last-token-id', [], deployer);
+    expectEqual(lastTokenId.value, Cl.ok(uint(0)));
+
+    // Failed mint should not change state
+    const failedMint = simnet.callPublicFn('nft-contract', 'mint', [principal(user1)], user1);
+    expect(failedMint.isErr()).toBe(true);
+
+    lastTokenId = simnet.callReadOnlyFn('nft-contract', 'get-last-token-id', [], deployer);
+    expectEqual(lastTokenId.value, Cl.ok(uint(0))); // Should still be 0
+
+    // Successful mint should change state
+    const successMint = simnet.callPublicFn('nft-contract', 'mint', [principal(user1)], deployer);
+    expect(successMint.isOk()).toBe(true);
+
+    lastTokenId = simnet.callReadOnlyFn('nft-contract', 'get-last-token-id', [], deployer);
+    expectEqual(lastTokenId.value, Cl.ok(uint(1))); // Should now be 1
+  });
