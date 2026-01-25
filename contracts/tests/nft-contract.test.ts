@@ -786,3 +786,45 @@ describe('NFT Contract - Edge Cases and Boundaries', () => {
     expectEqual(ownerZero.value, Cl.ok(none()));
     expectEqual(ownerOne.value, Cl.ok(some(principal(user1))));
   });
+describe('NFT Contract - Integration Tests', () => {
+  let deployer: string;
+  let user1: string;
+  let user2: string;
+  let user3: string;
+
+  beforeEach(() => {
+    const accounts = simnet.getAccounts();
+    deployer = accounts.get('deployer')!;
+    user1 = accounts.get('wallet_1')!;
+    user2 = accounts.get('wallet_2')!;
+    user3 = accounts.get('wallet_3')!;
+  });
+
+  it('should handle mint then transfer sequences', () => {
+    // Mint 3 tokens to different users
+    simnet.callPublicFn('nft-contract', 'mint', [principal(user1)], deployer);
+    simnet.callPublicFn('nft-contract', 'mint', [principal(user2)], deployer);
+    simnet.callPublicFn('nft-contract', 'mint', [principal(user3)], deployer);
+
+    // Verify initial state
+    let lastTokenId = simnet.callReadOnlyFn('nft-contract', 'get-last-token-id', [], deployer);
+    expectEqual(lastTokenId.value, Cl.ok(uint(3)));
+
+    // Transfer tokens in a chain: user1 -> user2, user2 -> user3, user3 -> user1
+    simnet.callPublicFn('nft-contract', 'transfer', [uint(1), principal(user1), principal(user2)], user1);
+    simnet.callPublicFn('nft-contract', 'transfer', [uint(2), principal(user2), principal(user3)], user2);
+    simnet.callPublicFn('nft-contract', 'transfer', [uint(3), principal(user3), principal(user1)], user3);
+
+    // Verify final ownership
+    const owner1 = simnet.callReadOnlyFn('nft-contract', 'get-owner', [uint(1)], deployer);
+    const owner2 = simnet.callReadOnlyFn('nft-contract', 'get-owner', [uint(2)], deployer);
+    const owner3 = simnet.callReadOnlyFn('nft-contract', 'get-owner', [uint(3)], deployer);
+
+    expectEqual(owner1.value, Cl.ok(some(principal(user2))));
+    expectEqual(owner2.value, Cl.ok(some(principal(user3))));
+    expectEqual(owner3.value, Cl.ok(some(principal(user1))));
+
+    // Verify last-token-id unchanged by transfers
+    lastTokenId = simnet.callReadOnlyFn('nft-contract', 'get-last-token-id', [], deployer);
+    expectEqual(lastTokenId.value, Cl.ok(uint(3)));
+  });
