@@ -913,3 +913,78 @@ describe('NFT Contract - Integration Tests', () => {
     expectEqual(owner2.value, Cl.ok(some(principal(user1)))); // Transferred from user2 to user1
     expectEqual(owner3.value, Cl.ok(some(principal(user3)))); // Minted to user3
   });
+/**
+ * Test execution configuration
+ */
+const TEST_CONFIG = {
+  timeout: 30000, // 30 seconds per test
+  propertyIterations: 100,
+  maxRetries: 3
+};
+
+// Configure test timeouts
+describe.configure({ timeout: TEST_CONFIG.timeout });
+
+describe('NFT Contract - Performance and Reliability', () => {
+  let deployer: string;
+  let user1: string;
+
+  beforeEach(() => {
+    const accounts = simnet.getAccounts();
+    deployer = accounts.get('deployer')!;
+    user1 = accounts.get('wallet_1')!;
+  });
+
+  it('should handle rapid sequential operations', () => {
+    // Test rapid minting
+    const startTime = Date.now();
+    
+    for (let i = 0; i < 10; i++) {
+      const result = simnet.callPublicFn('nft-contract', 'mint', [principal(user1)], deployer);
+      expect(result.isOk()).toBe(true);
+    }
+    
+    const endTime = Date.now();
+    const duration = endTime - startTime;
+    
+    // Should complete within reasonable time (less than 5 seconds)
+    expect(duration).toBeLessThan(5000);
+    
+    // Verify final state
+    const lastTokenId = simnet.callReadOnlyFn('nft-contract', 'get-last-token-id', [], deployer);
+    expectEqual(lastTokenId.value, Cl.ok(uint(10)));
+  });
+
+  it('should maintain consistency under stress', () => {
+    // Create multiple tokens and perform many transfers
+    const tokenCount = 5;
+    const transferCount = 20;
+    
+    // Mint tokens
+    for (let i = 1; i <= tokenCount; i++) {
+      simnet.callPublicFn('nft-contract', 'mint', [principal(user1)], deployer);
+    }
+    
+    // Perform many transfers
+    for (let i = 0; i < transferCount; i++) {
+      const tokenId = (i % tokenCount) + 1;
+      const recipient = i % 2 === 0 ? deployer : user1;
+      const sender = i % 2 === 0 ? user1 : deployer;
+      
+      const result = simnet.callPublicFn(
+        'nft-contract',
+        'transfer',
+        [uint(tokenId), principal(sender), principal(recipient)],
+        sender
+      );
+      
+      expect(result.isOk()).toBe(true);
+    }
+    
+    // Verify all tokens still exist and have valid owners
+    for (let i = 1; i <= tokenCount; i++) {
+      const owner = simnet.callReadOnlyFn('nft-contract', 'get-owner', [uint(i)], deployer);
+      expect(owner.isOk()).toBe(true);
+      expect(owner.value.value.value).toBeDefined(); // Should have an owner
+    }
+  });
