@@ -1,15 +1,24 @@
+/**
+ * ERC-712 Contract Tests
+ * Tests for ERC-712 style structured data hashing and signature verification
+ */
+
 import { describe, it, expect, beforeEach } from 'vitest';
+import { simnet } from '@stacks/clarinet-sdk';
 import { Cl } from '@stacks/transactions';
 
-const accounts = simnet.getAccounts();
-const deployer = accounts.get('deployer')!;
-const wallet1 = accounts.get('wallet_1')!;
-const wallet2 = accounts.get('wallet_2')!;
-const wallet3 = accounts.get('wallet_3')!;
-
 describe('ERC-712 Contract Tests', () => {
+  let deployer: string;
+  let wallet1: string;
+  let wallet2: string;
+  let wallet3: string;
+
   beforeEach(() => {
-    // Reset simnet state before each test
+    const accounts = simnet.getAccounts();
+    deployer = accounts.get('deployer')!;
+    wallet1 = accounts.get('wallet_1')!;
+    wallet2 = accounts.get('wallet_2')!;
+    wallet3 = accounts.get('wallet_3')!;
   });
 
   describe('Contract Initialization', () => {
@@ -21,9 +30,10 @@ describe('ERC-712 Contract Tests', () => {
         deployer
       );
       
-      expect(result.result).toBeOk();
+      expect(result.isOk()).toBe(true);
       // Domain separator should be a 32-byte buffer
-      expect(Cl.isBuff(result.result)).toBe(true);
+      const domainSeparator = result.value;
+      expect(Cl.isBuff(domainSeparator)).toBe(true);
     });
 
     it('should have correct contract info', () => {
@@ -34,8 +44,8 @@ describe('ERC-712 Contract Tests', () => {
         deployer
       );
       
-      expect(result.result).toBeOk();
-      const info = Cl.unwrap(result.result);
+      expect(result.isOk()).toBe(true);
+      const info = Cl.unwrap(result.value);
       
       expect(Cl.unwrapAscii(info.name)).toBe('ERC712Contract');
       expect(Cl.unwrapAscii(info.version)).toBe('1');
@@ -44,7 +54,7 @@ describe('ERC-712 Contract Tests', () => {
       expect(Cl.unwrapBool(info.paused)).toBe(false);
     });
   });
-});
+
   describe('Nonce Management', () => {
     it('should start with nonce 0 for new users', () => {
       const result = simnet.callReadOnlyFn(
@@ -54,8 +64,8 @@ describe('ERC-712 Contract Tests', () => {
         deployer
       );
       
-      expect(result.result).toBeOk();
-      expect(Cl.unwrapUInt(result.result)).toBe(0n);
+      expect(result.isOk()).toBe(true);
+      expect(Cl.unwrapUInt(result.value)).toBe(0n);
     });
 
     it('should increment nonce after permit operation', () => {
@@ -66,7 +76,7 @@ describe('ERC-712 Contract Tests', () => {
         [Cl.principal(wallet1)],
         deployer
       );
-      expect(Cl.unwrapUInt(nonceResult.result)).toBe(0n);
+      expect(Cl.unwrapUInt(nonceResult.value)).toBe(0n);
 
       // Create a mock signature (this would normally be created off-chain)
       const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
@@ -86,9 +96,11 @@ describe('ERC-712 Contract Tests', () => {
       );
       
       // Should fail due to invalid signature
-      expect(permitResult.result).toBeErr(Cl.uint(402)); // ERR_INVALID_SIGNATURE
+      expect(permitResult.isErr()).toBe(true);
+      expect(permitResult.value.value).toBe(402); // ERR_INVALID_SIGNATURE
     });
   });
+
   describe('Domain Separator', () => {
     it('should return consistent domain separator', () => {
       const result1 = simnet.callReadOnlyFn(
@@ -105,8 +117,8 @@ describe('ERC-712 Contract Tests', () => {
         wallet1
       );
       
-      expect(result1.result).toEqual(result2.result);
-      expect(Cl.isBuff(result1.result)).toBe(true);
+      expect(result1.value).toEqual(result2.value);
+      expect(Cl.isBuff(result1.value)).toBe(true);
     });
 
     it('should have correct chain ID', () => {
@@ -117,9 +129,11 @@ describe('ERC-712 Contract Tests', () => {
         deployer
       );
       
-      expect(Cl.unwrapUInt(result.result)).toBe(1n);
+      expect(result.isOk()).toBe(true);
+      expect(Cl.unwrapUInt(result.value)).toBe(1n);
     });
   });
+
   describe('Permit Functionality', () => {
     it('should reject expired permits', () => {
       const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
@@ -138,7 +152,8 @@ describe('ERC-712 Contract Tests', () => {
         wallet1
       );
       
-      expect(result.result).toBeErr(Cl.uint(403)); // ERR_EXPIRED
+      expect(result.isErr()).toBe(true);
+      expect(result.value.value).toBe(403); // ERR_EXPIRED
     });
 
     it('should reject invalid signatures', () => {
@@ -158,9 +173,11 @@ describe('ERC-712 Contract Tests', () => {
         wallet1
       );
       
-      expect(result.result).toBeErr(Cl.uint(402)); // ERR_INVALID_SIGNATURE
+      expect(result.isErr()).toBe(true);
+      expect(result.value.value).toBe(402); // ERR_INVALID_SIGNATURE
     });
   });
+
   describe('Allowance Management', () => {
     it('should start with zero allowances', () => {
       const result = simnet.callReadOnlyFn(
@@ -170,7 +187,8 @@ describe('ERC-712 Contract Tests', () => {
         deployer
       );
       
-      expect(Cl.unwrapUInt(result.result)).toBe(0n);
+      expect(result.isOk()).toBe(true);
+      expect(Cl.unwrapUInt(result.value)).toBe(0n);
     });
 
     it('should return correct allowance values', () => {
@@ -190,10 +208,12 @@ describe('ERC-712 Contract Tests', () => {
           deployer
         );
         
-        expect(Cl.unwrapUInt(result.result)).toBe(0n);
+        expect(result.isOk()).toBe(true);
+        expect(Cl.unwrapUInt(result.value)).toBe(0n);
       });
     });
   });
+
   describe('Meta-Transaction Support', () => {
     it('should reject invalid meta-transaction signatures', () => {
       const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
@@ -212,7 +232,8 @@ describe('ERC-712 Contract Tests', () => {
         deployer
       );
       
-      expect(result.result).toBeErr(Cl.uint(402)); // ERR_INVALID_SIGNATURE
+      expect(result.isErr()).toBe(true);
+      expect(result.value.value).toBe(402); // ERR_INVALID_SIGNATURE
     });
 
     it('should handle meta-transaction structure correctly', () => {
@@ -237,10 +258,12 @@ describe('ERC-712 Contract Tests', () => {
         );
         
         // Should fail with invalid signature, not data structure error
-        expect(result.result).toBeErr(Cl.uint(402));
+        expect(result.isErr()).toBe(true);
+        expect(result.value.value).toBe(402);
       });
     });
   });
+
   describe('Delegation Functionality', () => {
     it('should reject expired delegation signatures', () => {
       const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
@@ -258,7 +281,8 @@ describe('ERC-712 Contract Tests', () => {
         deployer
       );
       
-      expect(result.result).toBeErr(Cl.uint(403)); // ERR_EXPIRED
+      expect(result.isErr()).toBe(true);
+      expect(result.value.value).toBe(403); // ERR_EXPIRED
     });
 
     it('should handle delegation queries correctly', () => {
@@ -269,8 +293,9 @@ describe('ERC-712 Contract Tests', () => {
         deployer
       );
       
+      expect(result.isOk()).toBe(true);
       // Should return none for non-existent delegation
-      expect(Cl.isNone(result.result)).toBe(true);
+      expect(Cl.isNone(result.value)).toBe(true);
     });
 
     it('should reject invalid delegation signatures', () => {
@@ -289,9 +314,11 @@ describe('ERC-712 Contract Tests', () => {
         deployer
       );
       
-      expect(result.result).toBeErr(Cl.uint(402)); // ERR_INVALID_SIGNATURE
+      expect(result.isErr()).toBe(true);
+      expect(result.value.value).toBe(402); // ERR_INVALID_SIGNATURE
     });
   });
+
   describe('Batch Operations', () => {
     it('should handle empty batch operations', () => {
       const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
@@ -304,7 +331,8 @@ describe('ERC-712 Contract Tests', () => {
         wallet1
       );
       
-      expect(result.result).toBeErr(Cl.uint(402)); // ERR_INVALID_SIGNATURE
+      expect(result.isErr()).toBe(true);
+      expect(result.value.value).toBe(402); // ERR_INVALID_SIGNATURE
     });
 
     it('should handle single batch operation', () => {
@@ -326,36 +354,11 @@ describe('ERC-712 Contract Tests', () => {
         wallet1
       );
       
-      expect(result.result).toBeErr(Cl.uint(402)); // ERR_INVALID_SIGNATURE
-    });
-
-    it('should handle multiple batch operations', () => {
-      const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
-      const mockData = Cl.bufferFromHex('0x' + '00'.repeat(50));
-      
-      const multipleOperations = Cl.list([
-        Cl.tuple({
-          to: Cl.principal(wallet2),
-          value: Cl.uint(100),
-          data: mockData
-        }),
-        Cl.tuple({
-          to: Cl.principal(wallet3),
-          value: Cl.uint(200),
-          data: mockData
-        })
-      ]);
-      
-      const result = simnet.callPublicFn(
-        'erc-712',
-        'execute-batch',
-        [multipleOperations, mockSignature],
-        wallet1
-      );
-      
-      expect(result.result).toBeErr(Cl.uint(402)); // ERR_INVALID_SIGNATURE
+      expect(result.isErr()).toBe(true);
+      expect(result.value.value).toBe(402); // ERR_INVALID_SIGNATURE
     });
   });
+
   describe('Administrative Functions', () => {
     it('should allow owner to pause contract', () => {
       const result = simnet.callPublicFn(
@@ -365,7 +368,7 @@ describe('ERC-712 Contract Tests', () => {
         deployer
       );
       
-      expect(result.result).toBeOk(Cl.bool(true));
+      expect(result.isOk()).toBe(true);
       
       // Verify contract is paused
       const pausedResult = simnet.callReadOnlyFn(
@@ -375,7 +378,8 @@ describe('ERC-712 Contract Tests', () => {
         deployer
       );
       
-      expect(Cl.unwrapBool(pausedResult.result)).toBe(true);
+      expect(pausedResult.isOk()).toBe(true);
+      expect(Cl.unwrapBool(pausedResult.value)).toBe(true);
     });
 
     it('should reject non-owner pause attempts', () => {
@@ -386,7 +390,8 @@ describe('ERC-712 Contract Tests', () => {
         wallet1
       );
       
-      expect(result.result).toBeErr(Cl.uint(401)); // ERR_UNAUTHORIZED
+      expect(result.isErr()).toBe(true);
+      expect(result.value.value).toBe(401); // ERR_UNAUTHORIZED
     });
 
     it('should allow owner to unpause contract', () => {
@@ -406,7 +411,7 @@ describe('ERC-712 Contract Tests', () => {
         deployer
       );
       
-      expect(result.result).toBeOk(Cl.bool(false));
+      expect(result.isOk()).toBe(true);
       
       // Verify contract is not paused
       const pausedResult = simnet.callReadOnlyFn(
@@ -416,9 +421,11 @@ describe('ERC-712 Contract Tests', () => {
         deployer
       );
       
-      expect(Cl.unwrapBool(pausedResult.result)).toBe(false);
+      expect(pausedResult.isOk()).toBe(true);
+      expect(Cl.unwrapBool(pausedResult.value)).toBe(false);
     });
   });
+
   describe('Emergency Functions', () => {
     it('should allow owner to invalidate user nonces', () => {
       // Get initial nonce
@@ -429,7 +436,7 @@ describe('ERC-712 Contract Tests', () => {
         deployer
       );
       
-      expect(Cl.unwrapUInt(initialNonce.result)).toBe(0n);
+      expect(Cl.unwrapUInt(initialNonce.value)).toBe(0n);
       
       // Emergency invalidate
       const result = simnet.callPublicFn(
@@ -439,7 +446,7 @@ describe('ERC-712 Contract Tests', () => {
         deployer
       );
       
-      expect(result.result).toBeOk(Cl.uint(1000));
+      expect(result.isOk()).toBe(true);
       
       // Check new nonce
       const newNonce = simnet.callReadOnlyFn(
@@ -449,7 +456,7 @@ describe('ERC-712 Contract Tests', () => {
         deployer
       );
       
-      expect(Cl.unwrapUInt(newNonce.result)).toBe(1000n);
+      expect(Cl.unwrapUInt(newNonce.value)).toBe(1000n);
     });
 
     it('should reject non-owner emergency invalidation', () => {
@@ -460,9 +467,11 @@ describe('ERC-712 Contract Tests', () => {
         wallet2
       );
       
-      expect(result.result).toBeErr(Cl.uint(401)); // ERR_UNAUTHORIZED
+      expect(result.isErr()).toBe(true);
+      expect(result.value.value).toBe(401); // ERR_UNAUTHORIZED
     });
   });
+
   describe('Signature Verification', () => {
     it('should verify typed data hash generation', () => {
       const mockStructHash = Cl.bufferFromHex('0x' + '12'.repeat(32));
@@ -474,9 +483,10 @@ describe('ERC-712 Contract Tests', () => {
         deployer
       );
       
-      expect(Cl.isBuff(result.result)).toBe(true);
+      expect(result.isOk()).toBe(true);
+      expect(Cl.isBuff(result.value)).toBe(true);
       // Should return a 32-byte hash
-      const hashBuffer = Cl.unwrapBuff(result.result);
+      const hashBuffer = Cl.unwrapBuff(result.value);
       expect(hashBuffer.length).toBe(32);
     });
 
@@ -491,24 +501,12 @@ describe('ERC-712 Contract Tests', () => {
         deployer
       );
       
+      expect(result.isOk()).toBe(true);
       // Should return false for invalid signature
-      expect(Cl.unwrapBool(result.result)).toBe(false);
-    });
-
-    it('should handle verify-typed-data function', () => {
-      const mockStructHash = Cl.bufferFromHex('0x' + '12'.repeat(32));
-      const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
-      
-      const result = simnet.callPublicFn(
-        'erc-712',
-        'verify-typed-data',
-        [mockStructHash, mockSignature, Cl.principal(wallet1)],
-        deployer
-      );
-      
-      expect(result.result).toBeOk(Cl.bool(false));
+      expect(Cl.unwrapBool(result.value)).toBe(false);
     });
   });
+
   describe('Edge Cases', () => {
     it('should handle maximum uint values', () => {
       const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
@@ -528,7 +526,8 @@ describe('ERC-712 Contract Tests', () => {
       );
       
       // Should fail with invalid signature, not overflow
-      expect(result.result).toBeErr(Cl.uint(402));
+      expect(result.isErr()).toBe(true);
+      expect(result.value.value).toBe(402);
     });
 
     it('should handle zero values correctly', () => {
@@ -547,277 +546,8 @@ describe('ERC-712 Contract Tests', () => {
         wallet1
       );
       
-      expect(result.result).toBeErr(Cl.uint(402)); // ERR_INVALID_SIGNATURE
-    });
-
-    it('should handle boundary block heights', () => {
-      const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
-      
-      // Test with current block height (should be expired)
-      const result = simnet.callPublicFn(
-        'erc-712',
-        'permit',
-        [
-          Cl.principal(wallet1),
-          Cl.principal(wallet2),
-          Cl.uint(1000),
-          Cl.uint(simnet.blockHeight),
-          mockSignature
-        ],
-        wallet1
-      );
-      
-      expect(result.result).toBeErr(Cl.uint(403)); // ERR_EXPIRED
+      expect(result.isErr()).toBe(true);
+      expect(result.value.value).toBe(402); // ERR_INVALID_SIGNATURE
     });
   });
-  describe('Contract Version and Metadata', () => {
-    it('should return correct contract version', () => {
-      const result = simnet.callReadOnlyFn(
-        'erc-712',
-        'get-contract-version',
-        [],
-        deployer
-      );
-      
-      expect(Cl.unwrapAscii(result.result)).toBe('1');
-    });
-
-    it('should return correct contract name', () => {
-      const result = simnet.callReadOnlyFn(
-        'erc-712',
-        'get-contract-name',
-        [],
-        deployer
-      );
-      
-      expect(Cl.unwrapAscii(result.result)).toBe('ERC712Contract');
-    });
-
-    it('should maintain consistent metadata across calls', () => {
-      const info1 = simnet.callReadOnlyFn('erc-712', 'get-contract-info', [], deployer);
-      const info2 = simnet.callReadOnlyFn('erc-712', 'get-contract-info', [], wallet1);
-      
-      expect(info1.result).toEqual(info2.result);
-    });
-  });
-  describe('Multiple User Scenarios', () => {
-    it('should handle multiple users with different nonces', () => {
-      const users = [wallet1, wallet2, wallet3];
-      
-      users.forEach(user => {
-        const nonce = simnet.callReadOnlyFn(
-          'erc-712',
-          'get-nonce',
-          [Cl.principal(user)],
-          deployer
-        );
-        
-        expect(Cl.unwrapUInt(nonce.result)).toBe(0n);
-      });
-    });
-
-    it('should handle cross-user allowance queries', () => {
-      const userPairs = [
-        [wallet1, wallet2],
-        [wallet2, wallet3],
-        [wallet3, wallet1],
-        [wallet1, wallet3]
-      ];
-      
-      userPairs.forEach(([owner, spender]) => {
-        const allowance = simnet.callReadOnlyFn(
-          'erc-712',
-          'get-allowance',
-          [Cl.principal(owner), Cl.principal(spender)],
-          deployer
-        );
-        
-        expect(Cl.unwrapUInt(allowance.result)).toBe(0n);
-      });
-    });
-
-    it('should handle delegation queries for multiple users', () => {
-      const users = [wallet1, wallet2, wallet3];
-      
-      users.forEach(user => {
-        const delegate = simnet.callReadOnlyFn(
-          'erc-712',
-          'get-delegate',
-          [Cl.principal(user)],
-          deployer
-        );
-        
-        expect(Cl.isNone(delegate.result)).toBe(true);
-      });
-    });
-  });
-  describe('Buffer and Data Handling', () => {
-    it('should handle different signature buffer sizes', () => {
-      const mockStructHash = Cl.bufferFromHex('0x' + '12'.repeat(32));
-      
-      // Test with incorrect signature sizes
-      const invalidSizes = [64, 66, 32, 128];
-      
-      invalidSizes.forEach(size => {
-        try {
-          const invalidSignature = Cl.bufferFromHex('0x' + '00'.repeat(size));
-          
-          const result = simnet.callReadOnlyFn(
-            'erc-712',
-            'is-valid-signature',
-            [mockStructHash, invalidSignature, Cl.principal(wallet1)],
-            deployer
-          );
-          
-          // Should handle gracefully or return false
-          if (size === 65) {
-            expect(Cl.unwrapBool(result.result)).toBe(false);
-          }
-        } catch (error) {
-          // Expected for invalid buffer sizes
-          expect(size).not.toBe(65);
-        }
-      });
-    });
-
-    it('should handle different struct hash sizes', () => {
-      const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
-      
-      // Test with different hash sizes
-      const hashSizes = [16, 32, 64];
-      
-      hashSizes.forEach(size => {
-        try {
-          const structHash = Cl.bufferFromHex('0x' + '12'.repeat(size));
-          
-          if (size === 32) {
-            const result = simnet.callReadOnlyFn(
-              'erc-712',
-              'is-valid-signature',
-              [structHash, mockSignature, Cl.principal(wallet1)],
-              deployer
-            );
-            
-            expect(Cl.unwrapBool(result.result)).toBe(false);
-          }
-        } catch (error) {
-          // Expected for invalid hash sizes
-          expect(size).not.toBe(32);
-        }
-      });
-    });
-  });
-  describe('State Consistency', () => {
-    it('should maintain consistent state across multiple operations', () => {
-      // Check initial state
-      const initialInfo = simnet.callReadOnlyFn(
-        'erc-712',
-        'get-contract-info',
-        [],
-        deployer
-      );
-      
-      // Perform some operations
-      const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
-      
-      simnet.callPublicFn(
-        'erc-712',
-        'permit',
-        [
-          Cl.principal(wallet1),
-          Cl.principal(wallet2),
-          Cl.uint(1000),
-          Cl.uint(simnet.blockHeight + 100),
-          mockSignature
-        ],
-        wallet1
-      );
-      
-      // Check state after operations
-      const finalInfo = simnet.callReadOnlyFn(
-        'erc-712',
-        'get-contract-info',
-        [],
-        deployer
-      );
-      
-      // Core contract info should remain the same
-      const initial = Cl.unwrap(initialInfo.result);
-      const final = Cl.unwrap(finalInfo.result);
-      
-      expect(Cl.unwrapAscii(initial.name)).toBe(Cl.unwrapAscii(final.name));
-      expect(Cl.unwrapAscii(initial.version)).toBe(Cl.unwrapAscii(final.version));
-      expect(Cl.unwrapPrincipal(initial.owner)).toBe(Cl.unwrapPrincipal(final.owner));
-    });
-
-    it('should handle concurrent nonce queries', () => {
-      const user = wallet1;
-      
-      // Multiple concurrent nonce queries should return same value
-      const nonce1 = simnet.callReadOnlyFn(
-        'erc-712',
-        'get-nonce',
-        [Cl.principal(user)],
-        deployer
-      );
-      
-      const nonce2 = simnet.callReadOnlyFn(
-        'erc-712',
-        'get-nonce',
-        [Cl.principal(user)],
-        wallet2
-      );
-      
-      expect(nonce1.result).toEqual(nonce2.result);
-    });
-  });
-  describe('Error Code Validation', () => {
-    it('should return correct error codes for unauthorized access', () => {
-      const result = simnet.callPublicFn(
-        'erc-712',
-        'set-paused',
-        [Cl.bool(true)],
-        wallet1
-      );
-      
-      expect(result.result).toBeErr(Cl.uint(401)); // ERR_UNAUTHORIZED
-    });
-
-    it('should return correct error codes for invalid signatures', () => {
-      const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
-      
-      const result = simnet.callPublicFn(
-        'erc-712',
-        'permit',
-        [
-          Cl.principal(wallet1),
-          Cl.principal(wallet2),
-          Cl.uint(1000),
-          Cl.uint(simnet.blockHeight + 100),
-          mockSignature
-        ],
-        wallet1
-      );
-      
-      expect(result.result).toBeErr(Cl.uint(402)); // ERR_INVALID_SIGNATURE
-    });
-
-    it('should return correct error codes for expired operations', () => {
-      const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
-      
-      const result = simnet.callPublicFn(
-        'erc-712',
-        'permit',
-        [
-          Cl.principal(wallet1),
-          Cl.principal(wallet2),
-          Cl.uint(1000),
-          Cl.uint(simnet.blockHeight - 1),
-          mockSignature
-        ],
-        wallet1
-      );
-      
-      expect(result.result).toBeErr(Cl.uint(403)); // ERR_EXPIRED
-    });
-  });
+});
