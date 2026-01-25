@@ -583,3 +583,23 @@ describe('NFT Contract - Token ID Tracking', () => {
       expectEqual(result.value, Cl.ok(uint(i)));
     }
   });
+  it('should verify accurate token ID tracking across operations', () => {
+    // Initial state
+    let result = simnet.callReadOnlyFn('nft-contract', 'get-last-token-id', [], deployer);
+    expectEqual(result.value, Cl.ok(uint(0)));
+
+    // Mint and transfer operations
+    simnet.callPublicFn('nft-contract', 'mint', [principal(user1)], deployer);
+    result = simnet.callReadOnlyFn('nft-contract', 'get-last-token-id', [], deployer);
+    expectEqual(result.value, Cl.ok(uint(1)));
+
+    // Transfer shouldn't affect last-token-id
+    simnet.callPublicFn('nft-contract', 'transfer', [uint(1), principal(user1), principal(deployer)], user1);
+    result = simnet.callReadOnlyFn('nft-contract', 'get-last-token-id', [], deployer);
+    expectEqual(result.value, Cl.ok(uint(1))); // Should still be 1
+
+    // Mint another token
+    simnet.callPublicFn('nft-contract', 'mint', [principal(user1)], deployer);
+    result = simnet.callReadOnlyFn('nft-contract', 'get-last-token-id', [], deployer);
+    expectEqual(result.value, Cl.ok(uint(2)));
+  });
