@@ -1121,3 +1121,20 @@ describe('NFT Contract - State Validation', () => {
     lastTokenId = simnet.callReadOnlyFn('nft-contract', 'get-last-token-id', [], deployer);
     expectEqual(lastTokenId.value, Cl.ok(uint(0)));
   });
+  it('should validate token existence patterns', () => {
+    // No tokens exist initially
+    for (let i = 1; i <= 3; i++) {
+      const owner = simnet.callReadOnlyFn('nft-contract', 'get-owner', [uint(i)], deployer);
+      expectEqual(owner.value, Cl.ok(none()));
+    }
+
+    // Mint one token
+    simnet.callPublicFn('nft-contract', 'mint', [principal(user1)], deployer);
+
+    // Only token 1 should exist
+    const owner1 = simnet.callReadOnlyFn('nft-contract', 'get-owner', [uint(1)], deployer);
+    const owner2 = simnet.callReadOnlyFn('nft-contract', 'get-owner', [uint(2)], deployer);
+
+    expectEqual(owner1.value, Cl.ok(some(principal(user1))));
+    expectEqual(owner2.value, Cl.ok(none()));
+  });
