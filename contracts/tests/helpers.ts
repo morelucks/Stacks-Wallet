@@ -304,3 +304,52 @@ export function assertNFTError(result: any, expectedErrorCode: number) {
   }
   expectEqual(result.value, Cl.error(uint(expectedErrorCode)));
 }
+/**
+ * Additional NFT testing utilities
+ */
+
+/**
+ * Batch mint multiple tokens
+ */
+export function batchMintNFTs(
+  contractName: string,
+  recipients: string[],
+  minter: string = 'deployer'
+): number[] {
+  const tokenIds: number[] = [];
+  
+  recipients.forEach((recipient, index) => {
+    const result = simnet.callPublicFn(
+      contractName,
+      'mint',
+      [principal(recipient)],
+      minter
+    );
+    
+    if (result.isOk()) {
+      tokenIds.push(index + 1);
+    }
+  });
+  
+  return tokenIds;
+}
+
+/**
+ * Verify token ownership batch
+ */
+export function verifyTokenOwnership(
+  contractName: string,
+  tokenOwnerPairs: Array<{ tokenId: number; owner: string }>,
+  caller: string = 'deployer'
+) {
+  tokenOwnerPairs.forEach(({ tokenId, owner }) => {
+    const result = simnet.callReadOnlyFn(
+      contractName,
+      'get-owner',
+      [uint(tokenId)],
+      caller
+    );
+    
+    expectEqual(result.value, Cl.ok(some(principal(owner))));
+  });
+}
