@@ -453,3 +453,34 @@ describe('NFT Contract - Transfer Access Control', () => {
     expectEqual(result1.value, Cl.error(uint(101)));
     expectEqual(result2.value, Cl.error(uint(101)));
   });
+describe('NFT Contract - Ownership Queries', () => {
+  let deployer: string;
+  let user1: string;
+  let user2: string;
+
+  beforeEach(() => {
+    const accounts = simnet.getAccounts();
+    deployer = accounts.get('deployer')!;
+    user1 = accounts.get('wallet_1')!;
+    user2 = accounts.get('wallet_2')!;
+  });
+
+  it('should get owner of existing token', () => {
+    // Mint a token
+    simnet.callPublicFn(
+      'nft-contract',
+      'mint',
+      [principal(user1)],
+      deployer
+    );
+
+    const result = simnet.callReadOnlyFn(
+      'nft-contract',
+      'get-owner',
+      [uint(1)],
+      deployer
+    );
+
+    expect(result.isOk()).toBe(true);
+    expectEqual(result.value, Cl.ok(some(principal(user1))));
+  });
