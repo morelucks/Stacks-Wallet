@@ -1040,3 +1040,14 @@ describe('NFT Contract - Transfer Edge Cases', () => {
     const owner = simnet.callReadOnlyFn('nft-contract', 'get-owner', [uint(1)], deployer);
     expectEqual(owner.value, Cl.ok(some(principal(user1))));
   });
+  it('should reject transfer with wrong sender parameter', () => {
+    const result = simnet.callPublicFn(
+      'nft-contract',
+      'transfer',
+      [uint(1), principal(user2), principal(user2)], // Wrong sender in params
+      user1 // Actual caller
+    );
+
+    expect(result.isErr()).toBe(true);
+    expectEqual(result.value, Cl.error(uint(101)));
+  });
