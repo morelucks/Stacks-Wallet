@@ -828,3 +828,36 @@ describe('NFT Contract - Integration Tests', () => {
     lastTokenId = simnet.callReadOnlyFn('nft-contract', 'get-last-token-id', [], deployer);
     expectEqual(lastTokenId.value, Cl.ok(uint(3)));
   });
+  it('should handle multiple users with multiple tokens', () => {
+    // Mint 6 tokens alternating between users
+    for (let i = 1; i <= 6; i++) {
+      const recipient = i % 3 === 1 ? user1 : i % 3 === 2 ? user2 : user3;
+      simnet.callPublicFn('nft-contract', 'mint', [principal(recipient)], deployer);
+    }
+
+    // Verify initial ownership pattern
+    // user1: tokens 1, 4
+    // user2: tokens 2, 5  
+    // user3: tokens 3, 6
+    const owners = [];
+    for (let i = 1; i <= 6; i++) {
+      const owner = simnet.callReadOnlyFn('nft-contract', 'get-owner', [uint(i)], deployer);
+      owners.push(owner.value);
+    }
+
+    const expectedUsers = [user1, user2, user3, user1, user2, user3];
+    for (let i = 0; i < 6; i++) {
+      expectEqual(owners[i], Cl.ok(some(principal(expectedUsers[i]))));
+    }
+
+    // Perform some transfers
+    simnet.callPublicFn('nft-contract', 'transfer', [uint(1), principal(user1), principal(user2)], user1);
+    simnet.callPublicFn('nft-contract', 'transfer', [uint(6), principal(user3), principal(user1)], user3);
+
+    // Verify updated ownership
+    const newOwner1 = simnet.callReadOnlyFn('nft-contract', 'get-owner', [uint(1)], deployer);
+    const newOwner6 = simnet.callReadOnlyFn('nft-contract', 'get-owner', [uint(6)], deployer);
+
+    expectEqual(newOwner1.value, Cl.ok(some(principal(user2))));
+    expectEqual(newOwner6.value, Cl.ok(some(principal(user1))));
+  });
