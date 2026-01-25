@@ -646,5 +646,14 @@ describe('ERC-712 Contract Tests', () => {
       expect(result.isOk()).toBe(true);
       expect(Cl.unwrapAscii(result.value)).toBe('ERC712Contract');
     });
+
+    it('should maintain consistent metadata across calls', () => {
+      const info1 = simnet.callReadOnlyFn('erc-712', 'get-contract-info', [], deployer);
+      const info2 = simnet.callReadOnlyFn('erc-712', 'get-contract-info', [], wallet1);
+      
+      expect(info1.isOk()).toBe(true);
+      expect(info2.isOk()).toBe(true);
+      expect(info1.value).toEqual(info2.value);
+    });
   });
 });
