@@ -264,6 +264,52 @@ describe('Multi-Token NFT - Minting', () => {
 
     expect(supplyResult.isOk()).toBe(true);
   });
+
+  it('should reject mint to invalid token ID', () => {
+    const mintAmount = formatTokenAmount(100);
+
+    const result = simnet.callPublicFn(
+      'multi-token-nft',
+      'mint',
+      [principal(user1), uint(999), uint(mintAmount)], // Non-existent token
+      creator1
+    );
+
+    expect(result.isErr()).toBe(true);
+  });
+
+  it('should handle multiple mints to same user', () => {
+    const mintAmount1 = formatTokenAmount(100);
+    const mintAmount2 = formatTokenAmount(50);
+
+    // First mint
+    simnet.callPublicFn(
+      'multi-token-nft',
+      'mint',
+      [principal(user1), uint(1), uint(mintAmount1)],
+      creator1
+    );
+
+    // Second mint
+    const result = simnet.callPublicFn(
+      'multi-token-nft',
+      'mint',
+      [principal(user1), uint(1), uint(mintAmount2)],
+      creator1
+    );
+
+    expect(result.isOk()).toBe(true);
+
+    // Verify total balance
+    const balanceResult = simnet.callReadOnlyFn(
+      'multi-token-nft',
+      'balance-of',
+      [principal(user1), uint(1)],
+      creator1
+    );
+
+    expectEqual(balanceResult.value, Cl.ok(uint(mintAmount1 + mintAmount2)));
+  });
 });
 
 describe('Multi-Token NFT - Transfers', () => {
