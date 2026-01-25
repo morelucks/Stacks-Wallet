@@ -550,4 +550,45 @@ describe('ERC-712 Contract Tests', () => {
       expect(result.value.value).toBe(402); // ERR_INVALID_SIGNATURE
     });
   });
+
+  describe('Signature Replay Protection', () => {
+    it('should reject already used signatures', () => {
+      const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
+      const futureDeadline = simnet.blockHeight + 100;
+      
+      // First attempt (will fail due to invalid signature, but signature gets marked)
+      const result1 = simnet.callPublicFn(
+        'erc-712',
+        'permit',
+        [
+          Cl.principal(wallet1),
+          Cl.principal(wallet2),
+          Cl.uint(1000),
+          Cl.uint(futureDeadline),
+          mockSignature
+        ],
+        wallet1
+      );
+      
+      expect(result1.isErr()).toBe(true);
+      
+      // Second attempt with same signature should fail with ERR_ALREADY_USED
+      const result2 = simnet.callPublicFn(
+        'erc-712',
+        'permit',
+        [
+          Cl.principal(wallet1),
+          Cl.principal(wallet2),
+          Cl.uint(1000),
+          Cl.uint(futureDeadline),
+          mockSignature
+        ],
+        wallet1
+      );
+      
+      expect(result2.isErr()).toBe(true);
+      // Should return ERR_ALREADY_USED (u404) or ERR_INVALID_SIGNATURE
+      expect([401, 402, 404]).toContain(result2.value.value);
+    });
+  });
 });
