@@ -134,6 +134,40 @@ describe('Multi-Token NFT - Token Creation', () => {
 
     expect(result.isErr()).toBe(true);
   });
+
+  it('should reject zero supply', () => {
+    const supply = 0;
+    const uri = 'https://example.com/token.json';
+    const name = 'Token';
+    const description = 'Description';
+    const royalty = 0;
+
+    const result = simnet.callPublicFn(
+      'multi-token-nft',
+      'create-token-with-royalty',
+      [uint(supply), str(uri), str(name), str(description), uint(royalty)],
+      creator1
+    );
+
+    expect(result.isErr()).toBe(true);
+  });
+
+  it('should reject empty name', () => {
+    const supply = formatTokenAmount(1000);
+    const uri = 'https://example.com/token.json';
+    const name = ''; // Empty
+    const description = 'Description';
+    const royalty = 0;
+
+    const result = simnet.callPublicFn(
+      'multi-token-nft',
+      'create-token-with-royalty',
+      [uint(supply), str(uri), str(name), str(description), uint(royalty)],
+      creator1
+    );
+
+    expect(result.isErr()).toBe(true);
+  });
 });
 
 describe('Multi-Token NFT - Minting', () => {
