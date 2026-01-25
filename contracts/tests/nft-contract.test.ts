@@ -119,3 +119,45 @@ describe('NFT Contract - Minting Operations', () => {
     expectEqual(owner1.value, Cl.ok(some(principal(user1))));
     expectEqual(owner2.value, Cl.ok(some(principal(user1))));
   });
+  it('should mint tokens to different recipients', () => {
+    // Mint to user1
+    const result1 = simnet.callPublicFn(
+      'nft-contract',
+      'mint',
+      [principal(user1)],
+      deployer
+    );
+
+    // Mint to user2
+    const result2 = simnet.callPublicFn(
+      'nft-contract',
+      'mint',
+      [principal(user2)],
+      deployer
+    );
+
+    // Mint to user3
+    const result3 = simnet.callPublicFn(
+      'nft-contract',
+      'mint',
+      [principal(user3)],
+      deployer
+    );
+
+    expect(result1.isOk()).toBe(true);
+    expect(result2.isOk()).toBe(true);
+    expect(result3.isOk()).toBe(true);
+
+    expectEqual(result1.value, Cl.ok(uint(1)));
+    expectEqual(result2.value, Cl.ok(uint(2)));
+    expectEqual(result3.value, Cl.ok(uint(3)));
+
+    // Verify ownership
+    const owner1 = simnet.callReadOnlyFn('nft-contract', 'get-owner', [uint(1)], deployer);
+    const owner2 = simnet.callReadOnlyFn('nft-contract', 'get-owner', [uint(2)], deployer);
+    const owner3 = simnet.callReadOnlyFn('nft-contract', 'get-owner', [uint(3)], deployer);
+
+    expectEqual(owner1.value, Cl.ok(some(principal(user1))));
+    expectEqual(owner2.value, Cl.ok(some(principal(user2))));
+    expectEqual(owner3.value, Cl.ok(some(principal(user3))));
+  });
