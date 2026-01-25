@@ -177,4 +177,40 @@ describe('ERC-712 Contract Tests', () => {
       expect(result.value.value).toBe(402); // ERR_INVALID_SIGNATURE
     });
   });
+
+  describe('Allowance Management', () => {
+    it('should start with zero allowances', () => {
+      const result = simnet.callReadOnlyFn(
+        'erc-712',
+        'get-allowance',
+        [Cl.principal(wallet1), Cl.principal(wallet2)],
+        deployer
+      );
+      
+      expect(result.isOk()).toBe(true);
+      expect(Cl.unwrapUInt(result.value)).toBe(0n);
+    });
+
+    it('should return correct allowance values', () => {
+      // Test multiple allowance combinations
+      const combinations = [
+        [wallet1, wallet2],
+        [wallet2, wallet1],
+        [wallet1, wallet3],
+        [wallet3, wallet1]
+      ];
+
+      combinations.forEach(([owner, spender]) => {
+        const result = simnet.callReadOnlyFn(
+          'erc-712',
+          'get-allowance',
+          [Cl.principal(owner), Cl.principal(spender)],
+          deployer
+        );
+        
+        expect(result.isOk()).toBe(true);
+        expect(Cl.unwrapUInt(result.value)).toBe(0n);
+      });
+    });
+  });
 });
