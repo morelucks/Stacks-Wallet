@@ -219,3 +219,46 @@ describe('NFT Contract - Minting Access Control', () => {
     expect(result.isErr()).toBe(true);
     expectEqual(result.value, Cl.error(uint(100))); // ERR-OWNER-ONLY
   });
+  it('should allow contract owner to mint successfully', () => {
+    const result = simnet.callPublicFn(
+      'nft-contract',
+      'mint',
+      [principal(user1)],
+      deployer // Contract owner
+    );
+
+    expect(result.isOk()).toBe(true);
+    expectEqual(result.value, Cl.ok(uint(1)));
+
+    // Verify token was actually minted
+    const owner = simnet.callReadOnlyFn(
+      'nft-contract',
+      'get-owner',
+      [uint(1)],
+      deployer
+    );
+
+    expectEqual(owner.value, Cl.ok(some(principal(user1))));
+  });
+
+  it('should verify ERR-OWNER-ONLY error code consistency', () => {
+    // Test multiple non-owners get same error
+    const result1 = simnet.callPublicFn(
+      'nft-contract',
+      'mint',
+      [principal(user1)],
+      user1
+    );
+
+    const result2 = simnet.callPublicFn(
+      'nft-contract',
+      'mint',
+      [principal(user2)],
+      user2
+    );
+
+    expect(result1.isErr()).toBe(true);
+    expect(result2.isErr()).toBe(true);
+    expectEqual(result1.value, Cl.error(uint(100)));
+    expectEqual(result2.value, Cl.error(uint(100)));
+  });
