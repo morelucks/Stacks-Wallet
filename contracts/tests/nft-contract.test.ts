@@ -639,3 +639,39 @@ describe('NFT Contract - Token URI', () => {
     expect(result.isOk()).toBe(true);
     expectEqual(result.value, Cl.ok(none()));
   });
+describe('NFT Contract - Error Handling', () => {
+  let deployer: string;
+  let user1: string;
+  let user2: string;
+
+  beforeEach(() => {
+    const accounts = simnet.getAccounts();
+    deployer = accounts.get('deployer')!;
+    user1 = accounts.get('wallet_1')!;
+    user2 = accounts.get('wallet_2')!;
+  });
+
+  it('should test all defined error codes', () => {
+    // ERR-OWNER-ONLY (u100) - Non-owner trying to mint
+    const mintError = simnet.callPublicFn(
+      'nft-contract',
+      'mint',
+      [principal(user1)],
+      user1
+    );
+    expect(mintError.isErr()).toBe(true);
+    expectEqual(mintError.value, Cl.error(uint(100)));
+
+    // Mint a token for transfer tests
+    simnet.callPublicFn('nft-contract', 'mint', [principal(user1)], deployer);
+
+    // ERR-NOT-TOKEN-OWNER (u101) - Non-owner trying to transfer
+    const transferError = simnet.callPublicFn(
+      'nft-contract',
+      'transfer',
+      [uint(1), principal(user1), principal(user2)],
+      user2
+    );
+    expect(transferError.isErr()).toBe(true);
+    expectEqual(transferError.value, Cl.error(uint(101)));
+  });
