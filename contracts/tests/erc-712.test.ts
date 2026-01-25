@@ -393,5 +393,161 @@ describe('ERC-712 Contract Tests', () => {
       expect(result.isErr()).toBe(true);
       expect(result.value.value).toBe(401); // ERR_UNAUTHORIZED
     });
+
+    it('should allow owner to unpause contract', () => {
+      // First pause
+      simnet.callPublicFn(
+        'erc-712',
+        'set-paused',
+        [Cl.bool(true)],
+        deployer
+      );
+      
+      // Then unpause
+      const result = simnet.callPublicFn(
+        'erc-712',
+        'set-paused',
+        [Cl.bool(false)],
+        deployer
+      );
+      
+      expect(result.isOk()).toBe(true);
+      
+      // Verify contract is not paused
+      const pausedResult = simnet.callReadOnlyFn(
+        'erc-712',
+        'is-paused',
+        [],
+        deployer
+      );
+      
+      expect(pausedResult.isOk()).toBe(true);
+      expect(Cl.unwrapBool(pausedResult.value)).toBe(false);
+    });
+  });
+
+  describe('Emergency Functions', () => {
+    it('should allow owner to invalidate user nonces', () => {
+      // Get initial nonce
+      const initialNonce = simnet.callReadOnlyFn(
+        'erc-712',
+        'get-nonce',
+        [Cl.principal(wallet1)],
+        deployer
+      );
+      
+      expect(Cl.unwrapUInt(initialNonce.value)).toBe(0n);
+      
+      // Emergency invalidate
+      const result = simnet.callPublicFn(
+        'erc-712',
+        'emergency-invalidate-nonce',
+        [Cl.principal(wallet1)],
+        deployer
+      );
+      
+      expect(result.isOk()).toBe(true);
+      
+      // Check new nonce
+      const newNonce = simnet.callReadOnlyFn(
+        'erc-712',
+        'get-nonce',
+        [Cl.principal(wallet1)],
+        deployer
+      );
+      
+      expect(Cl.unwrapUInt(newNonce.value)).toBe(1000n);
+    });
+
+    it('should reject non-owner emergency invalidation', () => {
+      const result = simnet.callPublicFn(
+        'erc-712',
+        'emergency-invalidate-nonce',
+        [Cl.principal(wallet1)],
+        wallet2
+      );
+      
+      expect(result.isErr()).toBe(true);
+      expect(result.value.value).toBe(401); // ERR_UNAUTHORIZED
+    });
+  });
+
+  describe('Signature Verification', () => {
+    it('should verify typed data hash generation', () => {
+      const mockStructHash = Cl.bufferFromHex('0x' + '12'.repeat(32));
+      
+      const result = simnet.callReadOnlyFn(
+        'erc-712',
+        'get-typed-data-hash',
+        [mockStructHash],
+        deployer
+      );
+      
+      expect(result.isOk()).toBe(true);
+      expect(Cl.isBuff(result.value)).toBe(true);
+      // Should return a 32-byte hash
+      const hashBuffer = Cl.unwrapBuff(result.value);
+      expect(hashBuffer.length).toBe(32);
+    });
+
+    it('should validate signature status correctly', () => {
+      const mockStructHash = Cl.bufferFromHex('0x' + '12'.repeat(32));
+      const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
+      
+      const result = simnet.callReadOnlyFn(
+        'erc-712',
+        'is-valid-signature',
+        [mockStructHash, mockSignature, Cl.principal(wallet1)],
+        deployer
+      );
+      
+      expect(result.isOk()).toBe(true);
+      // Should return false for invalid signature
+      expect(Cl.unwrapBool(result.value)).toBe(false);
+    });
+  });
+
+  describe('Edge Cases', () => {
+    it('should handle maximum uint values', () => {
+      const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
+      const maxUint = 2n ** 128n - 1n; // Large number
+      
+      const result = simnet.callPublicFn(
+        'erc-712',
+        'permit',
+        [
+          Cl.principal(wallet1),
+          Cl.principal(wallet2),
+          Cl.uint(maxUint),
+          Cl.uint(simnet.blockHeight + 100),
+          mockSignature
+        ],
+        wallet1
+      );
+      
+      // Should fail with invalid signature, not overflow
+      expect(result.isErr()).toBe(true);
+      expect(result.value.value).toBe(402);
+    });
+
+    it('should handle zero values correctly', () => {
+      const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
+      
+      const result = simnet.callPublicFn(
+        'erc-712',
+        'permit',
+        [
+          Cl.principal(wallet1),
+          Cl.principal(wallet2),
+          Cl.uint(0),
+          Cl.uint(simnet.blockHeight + 100),
+          mockSignature
+        ],
+        wallet1
+      );
+      
+      expect(result.isErr()).toBe(true);
+      expect(result.value.value).toBe(402); // ERR_INVALID_SIGNATURE
+    });
   });
 });
