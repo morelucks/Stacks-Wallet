@@ -539,3 +539,24 @@ describe('NFT Contract - Ownership Queries', () => {
     expectEqual(owner2.value, Cl.ok(some(principal(user2))));
     expectEqual(owner3.value, Cl.ok(some(principal(deployer))));
   });
+describe('NFT Contract - Token ID Tracking', () => {
+  let deployer: string;
+  let user1: string;
+
+  beforeEach(() => {
+    const accounts = simnet.getAccounts();
+    deployer = accounts.get('deployer')!;
+    user1 = accounts.get('wallet_1')!;
+  });
+
+  it('should return zero for initial state', () => {
+    const result = simnet.callReadOnlyFn(
+      'nft-contract',
+      'get-last-token-id',
+      [],
+      deployer
+    );
+
+    expect(result.isOk()).toBe(true);
+    expectEqual(result.value, Cl.ok(uint(0)));
+  });
