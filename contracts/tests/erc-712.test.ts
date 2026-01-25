@@ -591,4 +591,34 @@ describe('ERC-712 Contract Tests', () => {
       expect([401, 402, 404]).toContain(result2.value.value);
     });
   });
+
+  describe('Batch Operations Extended', () => {
+    it('should handle multiple batch operations', () => {
+      const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
+      const mockData = Cl.bufferFromHex('0x' + '00'.repeat(50));
+      
+      const multipleOperations = Cl.list([
+        Cl.tuple({
+          to: Cl.principal(wallet2),
+          value: Cl.uint(100),
+          data: mockData
+        }),
+        Cl.tuple({
+          to: Cl.principal(wallet3),
+          value: Cl.uint(200),
+          data: mockData
+        })
+      ]);
+      
+      const result = simnet.callPublicFn(
+        'erc-712',
+        'execute-batch',
+        [multipleOperations, mockSignature],
+        wallet1
+      );
+      
+      expect(result.isErr()).toBe(true);
+      expect(result.value.value).toBe(402); // ERR_INVALID_SIGNATURE
+    });
+  });
 });
