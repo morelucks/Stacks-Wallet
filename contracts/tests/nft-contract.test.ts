@@ -1051,3 +1051,24 @@ describe('NFT Contract - Transfer Edge Cases', () => {
     expect(result.isErr()).toBe(true);
     expectEqual(result.value, Cl.error(uint(101)));
   });
+describe('NFT Contract - Ownership Query Variations', () => {
+  let deployer: string;
+  let user1: string;
+
+  beforeEach(() => {
+    const accounts = simnet.getAccounts();
+    deployer = accounts.get('deployer')!;
+    user1 = accounts.get('wallet_1')!;
+  });
+
+  it('should handle ownership queries from different callers', () => {
+    simnet.callPublicFn('nft-contract', 'mint', [principal(user1)], deployer);
+
+    // Query from deployer
+    const result1 = simnet.callReadOnlyFn('nft-contract', 'get-owner', [uint(1)], deployer);
+    expectEqual(result1.value, Cl.ok(some(principal(user1))));
+
+    // Query from user1
+    const result2 = simnet.callReadOnlyFn('nft-contract', 'get-owner', [uint(1)], user1);
+    expectEqual(result2.value, Cl.ok(some(principal(user1))));
+  });
