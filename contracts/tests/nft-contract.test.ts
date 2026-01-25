@@ -161,3 +161,38 @@ describe('NFT Contract - Minting Operations', () => {
     expectEqual(owner2.value, Cl.ok(some(principal(user2))));
     expectEqual(owner3.value, Cl.ok(some(principal(user3))));
   });
+  it('should verify token ID assignment and ownership tracking', () => {
+    // Mint 5 tokens
+    for (let i = 1; i <= 5; i++) {
+      const recipient = i % 2 === 1 ? user1 : user2; // Alternate between users
+      const result = simnet.callPublicFn(
+        'nft-contract',
+        'mint',
+        [principal(recipient)],
+        deployer
+      );
+
+      expect(result.isOk()).toBe(true);
+      expectEqual(result.value, Cl.ok(uint(i)));
+
+      // Verify last-token-id is updated
+      const lastTokenId = simnet.callReadOnlyFn(
+        'nft-contract',
+        'get-last-token-id',
+        [],
+        deployer
+      );
+
+      expectEqual(lastTokenId.value, Cl.ok(uint(i)));
+
+      // Verify ownership
+      const owner = simnet.callReadOnlyFn(
+        'nft-contract',
+        'get-owner',
+        [uint(i)],
+        deployer
+      );
+
+      expectEqual(owner.value, Cl.ok(some(principal(recipient))));
+    }
+  });
