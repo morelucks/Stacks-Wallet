@@ -603,3 +603,39 @@ describe('NFT Contract - Token ID Tracking', () => {
     result = simnet.callReadOnlyFn('nft-contract', 'get-last-token-id', [], deployer);
     expectEqual(result.value, Cl.ok(uint(2)));
   });
+describe('NFT Contract - Token URI', () => {
+  let deployer: string;
+  let user1: string;
+
+  beforeEach(() => {
+    const accounts = simnet.getAccounts();
+    deployer = accounts.get('deployer')!;
+    user1 = accounts.get('wallet_1')!;
+  });
+
+  it('should return none for token URI (current implementation)', () => {
+    // Mint a token first
+    simnet.callPublicFn('nft-contract', 'mint', [principal(user1)], deployer);
+
+    const result = simnet.callReadOnlyFn(
+      'nft-contract',
+      'get-token-uri',
+      [uint(1)],
+      deployer
+    );
+
+    expect(result.isOk()).toBe(true);
+    expectEqual(result.value, Cl.ok(none()));
+  });
+
+  it('should return none for non-existent token URI', () => {
+    const result = simnet.callReadOnlyFn(
+      'nft-contract',
+      'get-token-uri',
+      [uint(999)],
+      deployer
+    );
+
+    expect(result.isOk()).toBe(true);
+    expectEqual(result.value, Cl.ok(none()));
+  });
