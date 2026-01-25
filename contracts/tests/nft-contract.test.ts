@@ -1072,3 +1072,12 @@ describe('NFT Contract - Ownership Query Variations', () => {
     const result2 = simnet.callReadOnlyFn('nft-contract', 'get-owner', [uint(1)], user1);
     expectEqual(result2.value, Cl.ok(some(principal(user1))));
   });
+  it('should return consistent results for same token', () => {
+    simnet.callPublicFn('nft-contract', 'mint', [principal(user1)], deployer);
+
+    // Multiple queries should return same result
+    for (let i = 0; i < 5; i++) {
+      const result = simnet.callReadOnlyFn('nft-contract', 'get-owner', [uint(1)], deployer);
+      expectEqual(result.value, Cl.ok(some(principal(user1))));
+    }
+  });
