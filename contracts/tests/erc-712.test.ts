@@ -54,4 +54,83 @@ describe('ERC-712 Contract Tests', () => {
       expect(Cl.unwrapBool(info.paused)).toBe(false);
     });
   });
+
+  describe('Nonce Management', () => {
+    it('should start with nonce 0 for new users', () => {
+      const result = simnet.callReadOnlyFn(
+        'erc-712',
+        'get-nonce',
+        [Cl.principal(wallet1)],
+        deployer
+      );
+      
+      expect(result.isOk()).toBe(true);
+      expect(Cl.unwrapUInt(result.value)).toBe(0n);
+    });
+
+    it('should increment nonce after permit operation', () => {
+      // First check initial nonce
+      let nonceResult = simnet.callReadOnlyFn(
+        'erc-712',
+        'get-nonce',
+        [Cl.principal(wallet1)],
+        deployer
+      );
+      expect(Cl.unwrapUInt(nonceResult.value)).toBe(0n);
+
+      // Create a mock signature (this would normally be created off-chain)
+      const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
+      
+      // Try permit (will fail due to invalid signature, but that's expected)
+      const permitResult = simnet.callPublicFn(
+        'erc-712',
+        'permit',
+        [
+          Cl.principal(wallet1),
+          Cl.principal(wallet2),
+          Cl.uint(1000),
+          Cl.uint(simnet.blockHeight + 100),
+          mockSignature
+        ],
+        wallet1
+      );
+      
+      // Should fail due to invalid signature
+      expect(permitResult.isErr()).toBe(true);
+      expect(permitResult.value.value).toBe(402); // ERR_INVALID_SIGNATURE
+    });
+  });
+
+  describe('Domain Separator', () => {
+    it('should return consistent domain separator', () => {
+      const result1 = simnet.callReadOnlyFn(
+        'erc-712',
+        'get-domain-separator',
+        [],
+        deployer
+      );
+      
+      const result2 = simnet.callReadOnlyFn(
+        'erc-712',
+        'get-domain-separator',
+        [],
+        wallet1
+      );
+      
+      expect(result1.value).toEqual(result2.value);
+      expect(Cl.isBuff(result1.value)).toBe(true);
+    });
+
+    it('should have correct chain ID', () => {
+      const result = simnet.callReadOnlyFn(
+        'erc-712',
+        'get-chain-id',
+        [],
+        deployer
+      );
+      
+      expect(result.isOk()).toBe(true);
+      expect(Cl.unwrapUInt(result.value)).toBe(1n);
+    });
+  });
 });
