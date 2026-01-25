@@ -1169,3 +1169,16 @@ describe('NFT Contract - Advanced Scenarios', () => {
     expectEqual(owner2.value, Cl.ok(some(principal(user1))));
     expectEqual(lastTokenId.value, Cl.ok(uint(2)));
   });
+  it('should handle rapid ownership changes', () => {
+    // Mint token
+    simnet.callPublicFn('nft-contract', 'mint', [principal(user1)], deployer);
+    
+    // Rapid transfers back and forth
+    simnet.callPublicFn('nft-contract', 'transfer', [uint(1), principal(user1), principal(user2)], user1);
+    simnet.callPublicFn('nft-contract', 'transfer', [uint(1), principal(user2), principal(user1)], user2);
+    simnet.callPublicFn('nft-contract', 'transfer', [uint(1), principal(user1), principal(user2)], user1);
+    
+    // Verify final owner
+    const owner = simnet.callReadOnlyFn('nft-contract', 'get-owner', [uint(1)], deployer);
+    expectEqual(owner.value, Cl.ok(some(principal(user2))));
+  });
