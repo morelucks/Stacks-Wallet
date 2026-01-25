@@ -318,4 +318,80 @@ describe('ERC-712 Contract Tests', () => {
       expect(result.value.value).toBe(402); // ERR_INVALID_SIGNATURE
     });
   });
+
+  describe('Batch Operations', () => {
+    it('should handle empty batch operations', () => {
+      const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
+      const emptyOperations = Cl.list([]);
+      
+      const result = simnet.callPublicFn(
+        'erc-712',
+        'execute-batch',
+        [emptyOperations, mockSignature],
+        wallet1
+      );
+      
+      expect(result.isErr()).toBe(true);
+      expect(result.value.value).toBe(402); // ERR_INVALID_SIGNATURE
+    });
+
+    it('should handle single batch operation', () => {
+      const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
+      const mockData = Cl.bufferFromHex('0x' + '00'.repeat(50));
+      
+      const singleOperation = Cl.list([
+        Cl.tuple({
+          to: Cl.principal(wallet2),
+          value: Cl.uint(100),
+          data: mockData
+        })
+      ]);
+      
+      const result = simnet.callPublicFn(
+        'erc-712',
+        'execute-batch',
+        [singleOperation, mockSignature],
+        wallet1
+      );
+      
+      expect(result.isErr()).toBe(true);
+      expect(result.value.value).toBe(402); // ERR_INVALID_SIGNATURE
+    });
+  });
+
+  describe('Administrative Functions', () => {
+    it('should allow owner to pause contract', () => {
+      const result = simnet.callPublicFn(
+        'erc-712',
+        'set-paused',
+        [Cl.bool(true)],
+        deployer
+      );
+      
+      expect(result.isOk()).toBe(true);
+      
+      // Verify contract is paused
+      const pausedResult = simnet.callReadOnlyFn(
+        'erc-712',
+        'is-paused',
+        [],
+        deployer
+      );
+      
+      expect(pausedResult.isOk()).toBe(true);
+      expect(Cl.unwrapBool(pausedResult.value)).toBe(true);
+    });
+
+    it('should reject non-owner pause attempts', () => {
+      const result = simnet.callPublicFn(
+        'erc-712',
+        'set-paused',
+        [Cl.bool(true)],
+        wallet1
+      );
+      
+      expect(result.isErr()).toBe(true);
+      expect(result.value.value).toBe(401); // ERR_UNAUTHORIZED
+    });
+  });
 });
