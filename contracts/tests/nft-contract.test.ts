@@ -420,3 +420,36 @@ describe('NFT Contract - Transfer Access Control', () => {
     expect(result.isErr()).toBe(true);
     expectEqual(result.value, Cl.error(uint(101))); // ERR-NOT-TOKEN-OWNER
   });
+  it('should reject transfer of non-existent token', () => {
+    const result = simnet.callPublicFn(
+      'nft-contract',
+      'transfer',
+      [uint(999), principal(user1), principal(user2)],
+      user1
+    );
+
+    expect(result.isErr()).toBe(true);
+    // The contract should handle this gracefully
+  });
+
+  it('should verify ERR-NOT-TOKEN-OWNER error code consistency', () => {
+    // Test multiple non-owners get same error
+    const result1 = simnet.callPublicFn(
+      'nft-contract',
+      'transfer',
+      [uint(1), principal(user1), principal(user3)],
+      user2
+    );
+
+    const result2 = simnet.callPublicFn(
+      'nft-contract',
+      'transfer',
+      [uint(1), principal(user1), principal(user2)],
+      user3
+    );
+
+    expect(result1.isErr()).toBe(true);
+    expect(result2.isErr()).toBe(true);
+    expectEqual(result1.value, Cl.error(uint(101)));
+    expectEqual(result2.value, Cl.error(uint(101)));
+  });
