@@ -542,6 +542,48 @@ describe('Multi-Token NFT - Batch Transfers', () => {
     // Should return ERR_BATCH_SIZE_MISMATCH (u121)
     expectEqual(result.value, Cl.error(Cl.uint(121)));
   });
+
+  it('should reject empty batch transfer', () => {
+    const tokenIds: any[] = [];
+    const amounts: any[] = [];
+
+    const result = simnet.callPublicFn(
+      'multi-token-nft',
+      'safe-batch-transfer-from',
+      [principal(user1), principal(user2), Cl.list(tokenIds), Cl.list(amounts), none()],
+      user1
+    );
+
+    expect(result.isErr()).toBe(true);
+  });
+
+  it('should handle partial batch transfer failure', () => {
+    const tokenIds = [Cl.uint(1), Cl.uint(999)]; // Second token doesn't exist
+    const amounts = [Cl.uint(formatTokenAmount(100)), Cl.uint(formatTokenAmount(50))];
+
+    const result = simnet.callPublicFn(
+      'multi-token-nft',
+      'safe-batch-transfer-from',
+      [principal(user1), principal(user2), Cl.list(tokenIds), Cl.list(amounts), none()],
+      user1
+    );
+
+    expect(result.isErr()).toBe(true);
+  });
+
+  it('should handle batch transfer with insufficient balance', () => {
+    const tokenIds = [Cl.uint(1), Cl.uint(2)];
+    const amounts = [Cl.uint(formatTokenAmount(1000)), Cl.uint(formatTokenAmount(50))]; // First amount too high
+
+    const result = simnet.callPublicFn(
+      'multi-token-nft',
+      'safe-batch-transfer-from',
+      [principal(user1), principal(user2), Cl.list(tokenIds), Cl.list(amounts), none()],
+      user1
+    );
+
+    expect(result.isErr()).toBe(true);
+  });
 });
 
 describe('Multi-Token NFT - Approvals', () => {
