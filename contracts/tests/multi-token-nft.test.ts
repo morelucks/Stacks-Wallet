@@ -670,6 +670,99 @@ describe('Multi-Token NFT - Approvals', () => {
 
     expect(result.isErr()).toBe(true);
   });
+
+  it('should allow approved operator to transfer', () => {
+    // Create and mint tokens first
+    const supply = formatTokenAmount(1000);
+    const uri = 'https://example.com/token.json';
+    const name = 'Token';
+    const description = 'Description';
+    const royalty = 0;
+
+    simnet.callPublicFn(
+      'multi-token-nft',
+      'create-token-with-royalty',
+      [uint(supply), str(uri), str(name), str(description), uint(royalty)],
+      creator1
+    );
+
+    const mintAmount = formatTokenAmount(500);
+    simnet.callPublicFn(
+      'multi-token-nft',
+      'mint',
+      [principal(user1), uint(1), uint(mintAmount)],
+      creator1
+    );
+
+    // Set approval
+    simnet.callPublicFn(
+      'multi-token-nft',
+      'set-approval-for-all',
+      [principal(operator), Cl.bool(true)],
+      user1
+    );
+
+    // Operator transfers user1's tokens
+    const transferAmount = formatTokenAmount(100);
+    const result = simnet.callPublicFn(
+      'multi-token-nft',
+      'safe-transfer-from',
+      [principal(user1), principal(creator1), uint(1), uint(transferAmount), none()],
+      operator
+    );
+
+    expect(result.isOk()).toBe(true);
+  });
+
+  it('should reject transfer after approval revoked', () => {
+    // Create and mint tokens first
+    const supply = formatTokenAmount(1000);
+    const uri = 'https://example.com/token.json';
+    const name = 'Token';
+    const description = 'Description';
+    const royalty = 0;
+
+    simnet.callPublicFn(
+      'multi-token-nft',
+      'create-token-with-royalty',
+      [uint(supply), str(uri), str(name), str(description), uint(royalty)],
+      creator1
+    );
+
+    const mintAmount = formatTokenAmount(500);
+    simnet.callPublicFn(
+      'multi-token-nft',
+      'mint',
+      [principal(user1), uint(1), uint(mintAmount)],
+      creator1
+    );
+
+    // Set and revoke approval
+    simnet.callPublicFn(
+      'multi-token-nft',
+      'set-approval-for-all',
+      [principal(operator), Cl.bool(true)],
+      user1
+    );
+
+    simnet.callPublicFn(
+      'multi-token-nft',
+      'set-approval-for-all',
+      [principal(operator), Cl.bool(false)],
+      user1
+    );
+
+    // Operator tries to transfer
+    const transferAmount = formatTokenAmount(100);
+    const result = simnet.callPublicFn(
+      'multi-token-nft',
+      'safe-transfer-from',
+      [principal(user1), principal(creator1), uint(1), uint(transferAmount), none()],
+      operator
+    );
+
+    expect(result.isErr()).toBe(true);
+  });
 });
 
 describe('Multi-Token NFT - Burning', () => {
