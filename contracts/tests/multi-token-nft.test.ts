@@ -423,6 +423,55 @@ describe('Multi-Token NFT - Transfers', () => {
     // Should return ERR_UNAUTHORIZED (u102)
     expectEqual(result.value, Cl.error(Cl.uint(102)));
   });
+
+  it('should reject transfer with zero amount', () => {
+    const result = simnet.callPublicFn(
+      'multi-token-nft',
+      'safe-transfer-from',
+      [principal(user1), principal(user2), uint(1), uint(0), none()],
+      user1
+    );
+
+    expect(result.isErr()).toBe(true);
+  });
+
+  it('should reject self-transfer', () => {
+    const transferAmount = formatTokenAmount(100);
+
+    const result = simnet.callPublicFn(
+      'multi-token-nft',
+      'safe-transfer-from',
+      [principal(user1), principal(user1), uint(1), uint(transferAmount), none()],
+      user1
+    );
+
+    expect(result.isErr()).toBe(true);
+  });
+
+  it('should handle transfer to new recipient', () => {
+    const accounts = simnet.getAccounts();
+    const newUser = accounts.get('wallet_4')!;
+    const transferAmount = formatTokenAmount(75);
+
+    const result = simnet.callPublicFn(
+      'multi-token-nft',
+      'safe-transfer-from',
+      [principal(user1), principal(newUser), uint(1), uint(transferAmount), none()],
+      user1
+    );
+
+    expect(result.isOk()).toBe(true);
+
+    // Verify new user has balance
+    const balanceResult = simnet.callReadOnlyFn(
+      'multi-token-nft',
+      'balance-of',
+      [principal(newUser), uint(1)],
+      user1
+    );
+
+    expectEqual(balanceResult.value, Cl.ok(uint(transferAmount)));
+  });
 });
 
 describe('Multi-Token NFT - Batch Transfers', () => {
