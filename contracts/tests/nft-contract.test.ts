@@ -524,3 +524,18 @@ describe('NFT Contract - Ownership Queries', () => {
     expect(result.isOk()).toBe(true);
     expectEqual(result.value, Cl.ok(some(principal(user2))));
   });
+  it('should verify correct principal returned for multiple tokens', () => {
+    // Mint tokens to different users
+    simnet.callPublicFn('nft-contract', 'mint', [principal(user1)], deployer);
+    simnet.callPublicFn('nft-contract', 'mint', [principal(user2)], deployer);
+    simnet.callPublicFn('nft-contract', 'mint', [principal(deployer)], deployer);
+
+    // Check each token's owner
+    const owner1 = simnet.callReadOnlyFn('nft-contract', 'get-owner', [uint(1)], deployer);
+    const owner2 = simnet.callReadOnlyFn('nft-contract', 'get-owner', [uint(2)], deployer);
+    const owner3 = simnet.callReadOnlyFn('nft-contract', 'get-owner', [uint(3)], deployer);
+
+    expectEqual(owner1.value, Cl.ok(some(principal(user1))));
+    expectEqual(owner2.value, Cl.ok(some(principal(user2))));
+    expectEqual(owner3.value, Cl.ok(some(principal(deployer))));
+  });
