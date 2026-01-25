@@ -621,4 +621,30 @@ describe('ERC-712 Contract Tests', () => {
       expect(result.value.value).toBe(402); // ERR_INVALID_SIGNATURE
     });
   });
+
+  describe('Contract Metadata', () => {
+    it('should return correct contract version', () => {
+      const result = simnet.callReadOnlyFn(
+        'erc-712',
+        'get-contract-version',
+        [],
+        deployer
+      );
+      
+      expect(result.isOk()).toBe(true);
+      expect(Cl.unwrapAscii(result.value)).toBe('1');
+    });
+
+    it('should return correct contract name', () => {
+      const result = simnet.callReadOnlyFn(
+        'erc-712',
+        'get-contract-name',
+        [],
+        deployer
+      );
+      
+      expect(result.isOk()).toBe(true);
+      expect(Cl.unwrapAscii(result.value)).toBe('ERC712Contract');
+    });
+  });
 });
