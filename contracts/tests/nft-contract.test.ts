@@ -1098,3 +1098,26 @@ describe('NFT Contract - Token URI Variations', () => {
     expect(result.isOk()).toBe(true);
     expectEqual(result.value, Cl.ok(none()));
   });
+describe('NFT Contract - State Validation', () => {
+  let deployer: string;
+  let user1: string;
+
+  beforeEach(() => {
+    const accounts = simnet.getAccounts();
+    deployer = accounts.get('deployer')!;
+    user1 = accounts.get('wallet_1')!;
+  });
+
+  it('should maintain state integrity after failed operations', () => {
+    // Initial state
+    let lastTokenId = simnet.callReadOnlyFn('nft-contract', 'get-last-token-id', [], deployer);
+    expectEqual(lastTokenId.value, Cl.ok(uint(0)));
+
+    // Failed mint
+    const failedMint = simnet.callPublicFn('nft-contract', 'mint', [principal(user1)], user1);
+    expect(failedMint.isErr()).toBe(true);
+
+    // State should be unchanged
+    lastTokenId = simnet.callReadOnlyFn('nft-contract', 'get-last-token-id', [], deployer);
+    expectEqual(lastTokenId.value, Cl.ok(uint(0)));
+  });
