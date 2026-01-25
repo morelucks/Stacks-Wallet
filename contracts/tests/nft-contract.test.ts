@@ -751,3 +751,38 @@ describe('NFT Contract - Edge Cases and Boundaries', () => {
     expect(result.isOk()).toBe(true);
     expectEqual(result.value, Cl.ok(none()));
   });
+  it('should handle empty contract state consistently', () => {
+    // Test all read functions on empty contract
+    const lastTokenId = simnet.callReadOnlyFn('nft-contract', 'get-last-token-id', [], deployer);
+    const owner = simnet.callReadOnlyFn('nft-contract', 'get-owner', [uint(1)], deployer);
+    const uri = simnet.callReadOnlyFn('nft-contract', 'get-token-uri', [uint(1)], deployer);
+
+    expectEqual(lastTokenId.value, Cl.ok(uint(0)));
+    expectEqual(owner.value, Cl.ok(none()));
+    expectEqual(uri.value, Cl.ok(none()));
+  });
+
+  it('should handle boundary conditions for all functions', () => {
+    // Test transfer with zero token ID
+    const transferZero = simnet.callPublicFn(
+      'nft-contract',
+      'transfer',
+      [uint(0), principal(user1), principal(deployer)],
+      user1
+    );
+    expect(transferZero.isErr()).toBe(true);
+
+    // Test get-token-uri with zero
+    const uriZero = simnet.callReadOnlyFn('nft-contract', 'get-token-uri', [uint(0)], deployer);
+    expectEqual(uriZero.value, Cl.ok(none()));
+
+    // Test operations after minting first token
+    simnet.callPublicFn('nft-contract', 'mint', [principal(user1)], deployer);
+
+    // Now token 1 exists, but 0 still shouldn't
+    const ownerZero = simnet.callReadOnlyFn('nft-contract', 'get-owner', [uint(0)], deployer);
+    const ownerOne = simnet.callReadOnlyFn('nft-contract', 'get-owner', [uint(1)], deployer);
+
+    expectEqual(ownerZero.value, Cl.ok(none()));
+    expectEqual(ownerOne.value, Cl.ok(some(principal(user1))));
+  });
