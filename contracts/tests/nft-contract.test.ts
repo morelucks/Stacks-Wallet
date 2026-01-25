@@ -717,3 +717,37 @@ describe('NFT Contract - Error Handling', () => {
     lastTokenId = simnet.callReadOnlyFn('nft-contract', 'get-last-token-id', [], deployer);
     expectEqual(lastTokenId.value, Cl.ok(uint(1))); // Should now be 1
   });
+describe('NFT Contract - Edge Cases and Boundaries', () => {
+  let deployer: string;
+  let user1: string;
+
+  beforeEach(() => {
+    const accounts = simnet.getAccounts();
+    deployer = accounts.get('deployer')!;
+    user1 = accounts.get('wallet_1')!;
+  });
+
+  it('should handle zero token ID queries', () => {
+    const result = simnet.callReadOnlyFn(
+      'nft-contract',
+      'get-owner',
+      [uint(0)],
+      deployer
+    );
+
+    expect(result.isOk()).toBe(true);
+    expectEqual(result.value, Cl.ok(none()));
+  });
+
+  it('should handle large token ID queries', () => {
+    const largeId = 999999999;
+    const result = simnet.callReadOnlyFn(
+      'nft-contract',
+      'get-owner',
+      [uint(largeId)],
+      deployer
+    );
+
+    expect(result.isOk()).toBe(true);
+    expectEqual(result.value, Cl.ok(none()));
+  });
