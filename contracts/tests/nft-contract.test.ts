@@ -484,3 +484,43 @@ describe('NFT Contract - Ownership Queries', () => {
     expect(result.isOk()).toBe(true);
     expectEqual(result.value, Cl.ok(some(principal(user1))));
   });
+  it('should return none for non-existent token', () => {
+    const result = simnet.callReadOnlyFn(
+      'nft-contract',
+      'get-owner',
+      [uint(999)],
+      deployer
+    );
+
+    expect(result.isOk()).toBe(true);
+    expectEqual(result.value, Cl.ok(none()));
+  });
+
+  it('should get owner after transfers', () => {
+    // Mint token to user1
+    simnet.callPublicFn(
+      'nft-contract',
+      'mint',
+      [principal(user1)],
+      deployer
+    );
+
+    // Transfer to user2
+    simnet.callPublicFn(
+      'nft-contract',
+      'transfer',
+      [uint(1), principal(user1), principal(user2)],
+      user1
+    );
+
+    // Check owner is now user2
+    const result = simnet.callReadOnlyFn(
+      'nft-contract',
+      'get-owner',
+      [uint(1)],
+      deployer
+    );
+
+    expect(result.isOk()).toBe(true);
+    expectEqual(result.value, Cl.ok(some(principal(user2))));
+  });
