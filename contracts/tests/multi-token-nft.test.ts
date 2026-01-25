@@ -1106,3 +1106,143 @@ describe('Multi-Token NFT - Royalty System', () => {
     expect(result.isOk()).toBe(true);
   });
 });
+describe('Multi-Token NFT - Performance Tests', () => {
+  let deployer: string;
+  let creator1: string;
+  let user1: string;
+
+  beforeEach(() => {
+    const accounts = simnet.getAccounts();
+    deployer = accounts.get('deployer')!;
+    creator1 = accounts.get('wallet_1')!;
+    user1 = accounts.get('wallet_2')!;
+  });
+
+  it('should handle large batch operations efficiently', () => {
+    // Create multiple tokens
+    for (let i = 0; i < 5; i++) {
+      const supply = formatTokenAmount(1000);
+      const uri = `https://example.com/token-${i}.json`;
+      const name = `Token ${i}`;
+      const description = 'Performance test token';
+      const royalty = 0;
+
+      simnet.callPublicFn(
+        'multi-token-nft',
+        'create-token-with-royalty',
+        [uint(supply), str(uri), str(name), str(description), uint(royalty)],
+        creator1
+      );
+
+      // Mint to user1
+      const mintAmount = formatTokenAmount(500);
+      simnet.callPublicFn(
+        'multi-token-nft',
+        'mint',
+        [principal(user1), uint(i + 1), uint(mintAmount)],
+        creator1
+      );
+    }
+
+    // Large batch transfer
+    const tokenIds = [Cl.uint(1), Cl.uint(2), Cl.uint(3), Cl.uint(4), Cl.uint(5)];
+    const amounts = [
+      Cl.uint(formatTokenAmount(10)),
+      Cl.uint(formatTokenAmount(20)),
+      Cl.uint(formatTokenAmount(30)),
+      Cl.uint(formatTokenAmount(40)),
+      Cl.uint(formatTokenAmount(50))
+    ];
+
+    const result = simnet.callPublicFn(
+      'multi-token-nft',
+      'safe-batch-transfer-from',
+      [principal(user1), principal(creator1), Cl.list(tokenIds), Cl.list(amounts), none()],
+      user1
+    );
+
+    expect(result.isOk()).toBe(true);
+  });
+
+  it('should handle multiple sequential operations', () => {
+    const supply = formatTokenAmount(1000);
+    const uri = 'https://example.com/token.json';
+    const name = 'Sequential Test Token';
+    const description = 'Token for sequential operations';
+    const royalty = 0;
+
+    // Create token
+    simnet.callPublicFn(
+      'multi-token-nft',
+      'create-token-with-royalty',
+      [uint(supply), str(uri), str(name), str(description), uint(royalty)],
+      creator1
+    );
+
+    // Multiple mint operations
+    for (let i = 0; i < 10; i++) {
+      const mintAmount = formatTokenAmount(10);
+      const result = simnet.callPublicFn(
+        'multi-token-nft',
+        'mint',
+        [principal(user1), uint(1), uint(mintAmount)],
+        creator1
+      );
+      expect(result.isOk()).toBe(true);
+    }
+
+    // Verify final balance
+    const balanceResult = simnet.callReadOnlyFn(
+      'multi-token-nft',
+      'balance-of',
+      [principal(user1), uint(1)],
+      creator1
+    );
+
+    expectEqual(balanceResult.value, Cl.ok(uint(formatTokenAmount(100))));
+  });
+
+  it('should handle rapid approval changes', () => {
+    const accounts = simnet.getAccounts();
+    const operator1 = accounts.get('wallet_3')!;
+    const operator2 = accounts.get('wallet_4')!;
+
+    // Rapid approval changes
+    for (let i = 0; i < 5; i++) {
+      // Set approval for operator1
+      let result = simnet.callPublicFn(
+        'multi-token-nft',
+        'set-approval-for-all',
+        [principal(operator1), Cl.bool(true)],
+        user1
+      );
+      expect(result.isOk()).toBe(true);
+
+      // Set approval for operator2
+      result = simnet.callPublicFn(
+        'multi-token-nft',
+        'set-approval-for-all',
+        [principal(operator2), Cl.bool(true)],
+        user1
+      );
+      expect(result.isOk()).toBe(true);
+
+      // Revoke both
+      result = simnet.callPublicFn(
+        'multi-token-nft',
+        'set-approval-for-all',
+        [principal(operator1), Cl.bool(false)],
+        user1
+      );
+      expect(result.isOk()).toBe(true);
+
+      result = simnet.callPublicFn(
+        'multi-token-nft',
+        'set-approval-for-all',
+        [principal(operator2), Cl.bool(false)],
+        user1
+      );
+      expect(result.isOk()).toBe(true);
+    }
+  });
+});
