@@ -1013,3 +1013,30 @@ describe('NFT Contract - Additional Minting Tests', () => {
     const owner = simnet.callReadOnlyFn('nft-contract', 'get-owner', [uint(1)], deployer);
     expectEqual(owner.value, Cl.ok(some(principal(deployer))));
   });
+describe('NFT Contract - Transfer Edge Cases', () => {
+  let deployer: string;
+  let user1: string;
+  let user2: string;
+
+  beforeEach(() => {
+    const accounts = simnet.getAccounts();
+    deployer = accounts.get('deployer')!;
+    user1 = accounts.get('wallet_1')!;
+    user2 = accounts.get('wallet_2')!;
+
+    simnet.callPublicFn('nft-contract', 'mint', [principal(user1)], deployer);
+  });
+
+  it('should handle self-transfer', () => {
+    const result = simnet.callPublicFn(
+      'nft-contract',
+      'transfer',
+      [uint(1), principal(user1), principal(user1)],
+      user1
+    );
+
+    expect(result.isOk()).toBe(true);
+
+    const owner = simnet.callReadOnlyFn('nft-contract', 'get-owner', [uint(1)], deployer);
+    expectEqual(owner.value, Cl.ok(some(principal(user1))));
+  });
