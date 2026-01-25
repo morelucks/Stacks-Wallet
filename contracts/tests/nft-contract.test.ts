@@ -1004,3 +1004,12 @@ describe('NFT Contract - Additional Minting Tests', () => {
     expect(result.isOk()).toBe(true);
     expectEqual(result.value, Cl.ok(uint(1)));
   });
+  it('should mint to contract owner successfully', () => {
+    const result = simnet.callPublicFn('nft-contract', 'mint', [principal(deployer)], deployer);
+    
+    expect(result.isOk()).toBe(true);
+    expectEqual(result.value, Cl.ok(uint(1)));
+
+    const owner = simnet.callReadOnlyFn('nft-contract', 'get-owner', [uint(1)], deployer);
+    expectEqual(owner.value, Cl.ok(some(principal(deployer))));
+  });
