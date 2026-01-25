@@ -1025,3 +1025,84 @@ describe('Multi-Token NFT - Read-Only Functions', () => {
     expect(result.isErr()).toBe(true);
   });
 });
+
+describe('Multi-Token NFT - Royalty System', () => {
+  let deployer: string;
+  let creator1: string;
+  let user1: string;
+
+  beforeEach(() => {
+    const accounts = simnet.getAccounts();
+    deployer = accounts.get('deployer')!;
+    creator1 = accounts.get('wallet_1')!;
+    user1 = accounts.get('wallet_2')!;
+  });
+
+  it('should create token with valid royalty', () => {
+    const supply = formatTokenAmount(1000);
+    const uri = 'https://example.com/token.json';
+    const name = 'Royalty Token';
+    const description = 'Token with royalty';
+    const royalty = 1000; // 10%
+
+    const result = simnet.callPublicFn(
+      'multi-token-nft',
+      'create-token-with-royalty',
+      [uint(supply), str(uri), str(name), str(description), uint(royalty)],
+      creator1
+    );
+
+    expect(result.isOk()).toBe(true);
+  });
+
+  it('should reject royalty above maximum', () => {
+    const supply = formatTokenAmount(1000);
+    const uri = 'https://example.com/token.json';
+    const name = 'Token';
+    const description = 'Description';
+    const royalty = 10001; // > 100%
+
+    const result = simnet.callPublicFn(
+      'multi-token-nft',
+      'create-token-with-royalty',
+      [uint(supply), str(uri), str(name), str(description), uint(royalty)],
+      creator1
+    );
+
+    expect(result.isErr()).toBe(true);
+  });
+
+  it('should handle zero royalty', () => {
+    const supply = formatTokenAmount(1000);
+    const uri = 'https://example.com/token.json';
+    const name = 'No Royalty Token';
+    const description = 'Token without royalty';
+    const royalty = 0;
+
+    const result = simnet.callPublicFn(
+      'multi-token-nft',
+      'create-token-with-royalty',
+      [uint(supply), str(uri), str(name), str(description), uint(royalty)],
+      creator1
+    );
+
+    expect(result.isOk()).toBe(true);
+  });
+
+  it('should handle maximum valid royalty', () => {
+    const supply = formatTokenAmount(1000);
+    const uri = 'https://example.com/token.json';
+    const name = 'Max Royalty Token';
+    const description = 'Token with maximum royalty';
+    const royalty = 10000; // 100%
+
+    const result = simnet.callPublicFn(
+      'multi-token-nft',
+      'create-token-with-royalty',
+      [uint(supply), str(uri), str(name), str(description), uint(royalty)],
+      creator1
+    );
+
+    expect(result.isOk()).toBe(true);
+  });
+});
