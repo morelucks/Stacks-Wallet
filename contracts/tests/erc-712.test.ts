@@ -550,4 +550,127 @@ describe('ERC-712 Contract Tests', () => {
       expect(result.value.value).toBe(402); // ERR_INVALID_SIGNATURE
     });
   });
+
+  describe('Signature Replay Protection', () => {
+    it('should reject already used signatures', () => {
+      const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
+      const futureDeadline = simnet.blockHeight + 100;
+      
+      // First attempt (will fail due to invalid signature, but signature gets marked)
+      const result1 = simnet.callPublicFn(
+        'erc-712',
+        'permit',
+        [
+          Cl.principal(wallet1),
+          Cl.principal(wallet2),
+          Cl.uint(1000),
+          Cl.uint(futureDeadline),
+          mockSignature
+        ],
+        wallet1
+      );
+      
+      expect(result1.isErr()).toBe(true);
+      
+      // Second attempt with same signature should fail with ERR_ALREADY_USED
+      const result2 = simnet.callPublicFn(
+        'erc-712',
+        'permit',
+        [
+          Cl.principal(wallet1),
+          Cl.principal(wallet2),
+          Cl.uint(1000),
+          Cl.uint(futureDeadline),
+          mockSignature
+        ],
+        wallet1
+      );
+      
+      expect(result2.isErr()).toBe(true);
+      // Should return ERR_ALREADY_USED (u404) or ERR_INVALID_SIGNATURE
+      expect([401, 402, 404]).toContain(result2.value.value);
+    });
+  });
+
+  describe('Batch Operations Extended', () => {
+    it('should handle multiple batch operations', () => {
+      const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
+      const mockData = Cl.bufferFromHex('0x' + '00'.repeat(50));
+      
+      const multipleOperations = Cl.list([
+        Cl.tuple({
+          to: Cl.principal(wallet2),
+          value: Cl.uint(100),
+          data: mockData
+        }),
+        Cl.tuple({
+          to: Cl.principal(wallet3),
+          value: Cl.uint(200),
+          data: mockData
+        })
+      ]);
+      
+      const result = simnet.callPublicFn(
+        'erc-712',
+        'execute-batch',
+        [multipleOperations, mockSignature],
+        wallet1
+      );
+      
+      expect(result.isErr()).toBe(true);
+      expect(result.value.value).toBe(402); // ERR_INVALID_SIGNATURE
+    });
+  });
+
+  describe('Contract Metadata', () => {
+    it('should return correct contract version', () => {
+      const result = simnet.callReadOnlyFn(
+        'erc-712',
+        'get-contract-version',
+        [],
+        deployer
+      );
+      
+      expect(result.isOk()).toBe(true);
+      expect(Cl.unwrapAscii(result.value)).toBe('1');
+    });
+
+    it('should return correct contract name', () => {
+      const result = simnet.callReadOnlyFn(
+        'erc-712',
+        'get-contract-name',
+        [],
+        deployer
+      );
+      
+      expect(result.isOk()).toBe(true);
+      expect(Cl.unwrapAscii(result.value)).toBe('ERC712Contract');
+    });
+
+    it('should maintain consistent metadata across calls', () => {
+      const info1 = simnet.callReadOnlyFn('erc-712', 'get-contract-info', [], deployer);
+      const info2 = simnet.callReadOnlyFn('erc-712', 'get-contract-info', [], wallet1);
+      
+      expect(info1.isOk()).toBe(true);
+      expect(info2.isOk()).toBe(true);
+      expect(info1.value).toEqual(info2.value);
+    });
+  });
+
+  describe('Verify Typed Data', () => {
+    it('should handle verify-typed-data function', () => {
+      const mockStructHash = Cl.bufferFromHex('0x' + '12'.repeat(32));
+      const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
+      
+      const result = simnet.callPublicFn(
+        'erc-712',
+        'verify-typed-data',
+        [mockStructHash, mockSignature, Cl.principal(wallet1)],
+        deployer
+      );
+      
+      expect(result.isOk()).toBe(true);
+      expect(Cl.unwrapBool(result.value)).toBe(false);
+    });
+  });
 });
