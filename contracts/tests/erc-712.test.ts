@@ -656,4 +656,21 @@ describe('ERC-712 Contract Tests', () => {
       expect(info1.value).toEqual(info2.value);
     });
   });
+
+  describe('Verify Typed Data', () => {
+    it('should handle verify-typed-data function', () => {
+      const mockStructHash = Cl.bufferFromHex('0x' + '12'.repeat(32));
+      const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
+      
+      const result = simnet.callPublicFn(
+        'erc-712',
+        'verify-typed-data',
+        [mockStructHash, mockSignature, Cl.principal(wallet1)],
+        deployer
+      );
+      
+      expect(result.isOk()).toBe(true);
+      expect(Cl.unwrapBool(result.value)).toBe(false);
+    });
+  });
 });
