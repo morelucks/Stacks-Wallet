@@ -304,3 +304,34 @@ describe('NFT Contract - Transfer Operations', () => {
 
     expectEqual(owner.value, Cl.ok(some(principal(user2))));
   });
+  it('should handle multiple transfers of same token', () => {
+    // Transfer from user1 to user2
+    const result1 = simnet.callPublicFn(
+      'nft-contract',
+      'transfer',
+      [uint(1), principal(user1), principal(user2)],
+      user1
+    );
+
+    expect(result1.isOk()).toBe(true);
+
+    // Transfer from user2 to user3
+    const result2 = simnet.callPublicFn(
+      'nft-contract',
+      'transfer',
+      [uint(1), principal(user2), principal(user3)],
+      user2
+    );
+
+    expect(result2.isOk()).toBe(true);
+
+    // Verify final ownership
+    const owner = simnet.callReadOnlyFn(
+      'nft-contract',
+      'get-owner',
+      [uint(1)],
+      deployer
+    );
+
+    expectEqual(owner.value, Cl.ok(some(principal(user3))));
+  });
