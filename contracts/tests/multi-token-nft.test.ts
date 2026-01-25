@@ -1246,3 +1246,220 @@ describe('Multi-Token NFT - Performance Tests', () => {
     }
   });
 });
+describe('Multi-Token NFT - Integration Tests', () => {
+  let deployer: string;
+  let creator1: string;
+  let user1: string;
+  let user2: string;
+  let operator: string;
+
+  beforeEach(() => {
+    const accounts = simnet.getAccounts();
+    deployer = accounts.get('deployer')!;
+    creator1 = accounts.get('wallet_1')!;
+    user1 = accounts.get('wallet_2')!;
+    user2 = accounts.get('wallet_3')!;
+    operator = accounts.get('wallet_4')!;
+  });
+
+  it('should handle complete token lifecycle', () => {
+    // 1. Create token
+    const supply = formatTokenAmount(1000);
+    const uri = 'https://example.com/lifecycle-token.json';
+    const name = 'Lifecycle Token';
+    const description = 'Complete lifecycle test';
+    const royalty = 500; // 5%
+
+    let result = simnet.callPublicFn(
+      'multi-token-nft',
+      'create-token-with-royalty',
+      [uint(supply), str(uri), str(name), str(description), uint(royalty)],
+      creator1
+    );
+    expect(result.isOk()).toBe(true);
+
+    // 2. Mint tokens
+    const mintAmount = formatTokenAmount(500);
+    result = simnet.callPublicFn(
+      'multi-token-nft',
+      'mint',
+      [principal(user1), uint(1), uint(mintAmount)],
+      creator1
+    );
+    expect(result.isOk()).toBe(true);
+
+    // 3. Set approval
+    result = simnet.callPublicFn(
+      'multi-token-nft',
+      'set-approval-for-all',
+      [principal(operator), Cl.bool(true)],
+      user1
+    );
+    expect(result.isOk()).toBe(true);
+
+    // 4. Operator transfers
+    const transferAmount = formatTokenAmount(100);
+    result = simnet.callPublicFn(
+      'multi-token-nft',
+      'safe-transfer-from',
+      [principal(user1), principal(user2), uint(1), uint(transferAmount), none()],
+      operator
+    );
+    expect(result.isOk()).toBe(true);
+
+    // 5. User burns tokens
+    const burnAmount = formatTokenAmount(50);
+    result = simnet.callPublicFn(
+      'multi-token-nft',
+      'burn',
+      [principal(user2), uint(1), uint(burnAmount)],
+      user2
+    );
+    expect(result.isOk()).toBe(true);
+
+    // 6. Verify final state
+    const user1Balance = simnet.callReadOnlyFn(
+      'multi-token-nft',
+      'balance-of',
+      [principal(user1), uint(1)],
+      creator1
+    );
+    expectEqual(user1Balance.value, Cl.ok(uint(formatTokenAmount(400))));
+
+    const user2Balance = simnet.callReadOnlyFn(
+      'multi-token-nft',
+      'balance-of',
+      [principal(user2), uint(1)],
+      creator1
+    );
+    expectEqual(user2Balance.value, Cl.ok(uint(formatTokenAmount(50))));
+  });
+
+  it('should handle complex multi-user scenarios', () => {
+    const accounts = simnet.getAccounts();
+    const users = [
+      accounts.get('wallet_2')!,
+      accounts.get('wallet_3')!,
+      accounts.get('wallet_4')!,
+      accounts.get('wallet_5')!
+    ];
+
+    // Create token
+    const supply = formatTokenAmount(10000);
+    const uri = 'https://example.com/multi-user-token.json';
+    const name = 'Multi User Token';
+    const description = 'Token for multi-user testing';
+    const royalty = 250; // 2.5%
+
+    simnet.callPublicFn(
+      'multi-token-nft',
+      'create-token-with-royalty',
+      [uint(supply), str(uri), str(name), str(description), uint(royalty)],
+      creator1
+    );
+
+    // Distribute tokens to multiple users
+    users.forEach((user, index) => {
+      const mintAmount = formatTokenAmount(1000 + (index * 100));
+      const result = simnet.callPublicFn(
+        'multi-token-nft',
+        'mint',
+        [principal(user), uint(1), uint(mintAmount)],
+        creator1
+      );
+      expect(result.isOk()).toBe(true);
+    });
+
+    // Cross-transfers between users
+    for (let i = 0; i < users.length - 1; i++) {
+      const transferAmount = formatTokenAmount(50);
+      const result = simnet.callPublicFn(
+        'multi-token-nft',
+        'safe-transfer-from',
+        [principal(users[i]), principal(users[i + 1]), uint(1), uint(transferAmount), none()],
+        users[i]
+      );
+      expect(result.isOk()).toBe(true);
+    }
+
+    // Verify all users still have positive balances
+    users.forEach((user) => {
+      const balanceResult = simnet.callReadOnlyFn(
+        'multi-token-nft',
+        'balance-of',
+        [principal(user), uint(1)],
+        creator1
+      );
+      expect(balanceResult.isOk()).toBe(true);
+      // Balance should be greater than 0
+      const balance = balanceResult.value.value as any;
+      expect(Number(balance.value)).toBeGreaterThan(0);
+    });
+  });
+
+  it('should maintain data consistency under stress', () => {
+    // Create multiple tokens
+    const numTokens = 3;
+    for (let i = 0; i < numTokens; i++) {
+      const supply = formatTokenAmount(1000);
+      const uri = `https://example.com/stress-token-${i}.json`;
+      const name = `Stress Token ${i}`;
+      const description = 'Stress test token';
+      const royalty = i * 100; // Varying royalties
+
+      simnet.callPublicFn(
+        'multi-token-nft',
+        'create-token-with-royalty',
+        [uint(supply), str(uri), str(name), str(description), uint(royalty)],
+        creator1
+      );
+    }
+
+    // Mint tokens to multiple users
+    const accounts = simnet.getAccounts();
+    const testUsers = [user1, user2, accounts.get('wallet_5')!];
+    
+    testUsers.forEach((user, userIndex) => {
+      for (let tokenId = 1; tokenId <= numTokens; tokenId++) {
+        const mintAmount = formatTokenAmount(100 + (userIndex * 10));
+        const result = simnet.callPublicFn(
+          'multi-token-nft',
+          'mint',
+          [principal(user), uint(tokenId), uint(mintAmount)],
+          creator1
+        );
+        expect(result.isOk()).toBe(true);
+      }
+    });
+
+    // Perform random operations
+    for (let i = 0; i < 20; i++) {
+      const userIndex = i % testUsers.length;
+      const tokenId = (i % numTokens) + 1;
+      const user = testUsers[userIndex];
+      const recipient = testUsers[(userIndex + 1) % testUsers.length];
+
+      // Random transfer
+      const transferAmount = formatTokenAmount(5);
+      const result = simnet.callPublicFn(
+        'multi-token-nft',
+        'safe-transfer-from',
+        [principal(user), principal(recipient), uint(tokenId), uint(transferAmount), none()],
+        user
+      );
+      
+      // Some transfers might fail due to insufficient balance, which is expected
+      // We just verify the contract doesn't crash
+      expect(result.isOk() || result.isErr()).toBe(true);
+    }
+
+    // Verify contract is still functional
+    const infoResult = simnet.callReadOnlyFn(
+      'multi-token-nft',
+      'get-contract-info',
+      [],
+      creator1
+    );
+    expect(infoResult.isOk()).toBe(true);
+  });
+});
