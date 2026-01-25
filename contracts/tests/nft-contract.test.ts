@@ -78,3 +78,44 @@ describe('NFT Contract - Minting Operations', () => {
     expectEqual(ownerResult.value, Cl.ok(some(principal(user1))));
   });
 });
+  it('should mint multiple tokens to same recipient', () => {
+    // Mint first token
+    const result1 = simnet.callPublicFn(
+      'nft-contract',
+      'mint',
+      [principal(user1)],
+      deployer
+    );
+
+    expect(result1.isOk()).toBe(true);
+    expectEqual(result1.value, Cl.ok(uint(1)));
+
+    // Mint second token to same recipient
+    const result2 = simnet.callPublicFn(
+      'nft-contract',
+      'mint',
+      [principal(user1)],
+      deployer
+    );
+
+    expect(result2.isOk()).toBe(true);
+    expectEqual(result2.value, Cl.ok(uint(2)));
+
+    // Verify both tokens owned by user1
+    const owner1 = simnet.callReadOnlyFn(
+      'nft-contract',
+      'get-owner',
+      [uint(1)],
+      deployer
+    );
+
+    const owner2 = simnet.callReadOnlyFn(
+      'nft-contract',
+      'get-owner',
+      [uint(2)],
+      deployer
+    );
+
+    expectEqual(owner1.value, Cl.ok(some(principal(user1))));
+    expectEqual(owner2.value, Cl.ok(some(principal(user1))));
+  });
