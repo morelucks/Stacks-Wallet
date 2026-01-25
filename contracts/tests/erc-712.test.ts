@@ -213,4 +213,54 @@ describe('ERC-712 Contract Tests', () => {
       });
     });
   });
+
+  describe('Meta-Transaction Support', () => {
+    it('should reject invalid meta-transaction signatures', () => {
+      const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
+      const mockData = Cl.bufferFromHex('0x' + '00'.repeat(100));
+      
+      const result = simnet.callPublicFn(
+        'erc-712',
+        'execute-meta-transaction',
+        [
+          Cl.principal(wallet1),
+          Cl.principal(wallet2),
+          Cl.uint(1000),
+          mockData,
+          mockSignature
+        ],
+        deployer
+      );
+      
+      expect(result.isErr()).toBe(true);
+      expect(result.value.value).toBe(402); // ERR_INVALID_SIGNATURE
+    });
+
+    it('should handle meta-transaction structure correctly', () => {
+      // Test with different data sizes
+      const dataSizes = [10, 50, 100, 256];
+      
+      dataSizes.forEach(size => {
+        const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
+        const mockData = Cl.bufferFromHex('0x' + '00'.repeat(size));
+        
+        const result = simnet.callPublicFn(
+          'erc-712',
+          'execute-meta-transaction',
+          [
+            Cl.principal(wallet1),
+            Cl.principal(wallet2),
+            Cl.uint(1000),
+            mockData,
+            mockSignature
+          ],
+          deployer
+        );
+        
+        // Should fail with invalid signature, not data structure error
+        expect(result.isErr()).toBe(true);
+        expect(result.value.value).toBe(402);
+      });
+    });
+  });
 });
