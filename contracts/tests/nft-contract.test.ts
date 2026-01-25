@@ -1081,3 +1081,20 @@ describe('NFT Contract - Ownership Query Variations', () => {
       expectEqual(result.value, Cl.ok(some(principal(user1))));
     }
   });
+describe('NFT Contract - Token URI Variations', () => {
+  let deployer: string;
+  let user1: string;
+
+  beforeEach(() => {
+    const accounts = simnet.getAccounts();
+    deployer = accounts.get('deployer')!;
+    user1 = accounts.get('wallet_1')!;
+  });
+
+  it('should return consistent URI format', () => {
+    simnet.callPublicFn('nft-contract', 'mint', [principal(user1)], deployer);
+
+    const result = simnet.callReadOnlyFn('nft-contract', 'get-token-uri', [uint(1)], deployer);
+    expect(result.isOk()).toBe(true);
+    expectEqual(result.value, Cl.ok(none()));
+  });
