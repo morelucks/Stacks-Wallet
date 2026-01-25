@@ -988,3 +988,19 @@ describe('NFT Contract - Performance and Reliability', () => {
       expect(owner.value.value.value).toBeDefined(); // Should have an owner
     }
   });
+describe('NFT Contract - Additional Minting Tests', () => {
+  let deployer: string;
+  let user1: string;
+
+  beforeEach(() => {
+    const accounts = simnet.getAccounts();
+    deployer = accounts.get('deployer')!;
+    user1 = accounts.get('wallet_1')!;
+  });
+
+  it('should mint token with correct return value', () => {
+    const result = simnet.callPublicFn('nft-contract', 'mint', [principal(user1)], deployer);
+    
+    expect(result.isOk()).toBe(true);
+    expectEqual(result.value, Cl.ok(uint(1)));
+  });
