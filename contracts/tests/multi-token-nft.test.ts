@@ -857,6 +857,53 @@ describe('Multi-Token NFT - Burning', () => {
     // Should return ERR_INSUFFICIENT_BALANCE (u111)
     expectEqual(result.value, Cl.error(Cl.uint(111)));
   });
+
+  it('should reject burn with zero amount', () => {
+    const result = simnet.callPublicFn(
+      'multi-token-nft',
+      'burn',
+      [principal(user1), uint(1), uint(0)],
+      user1
+    );
+
+    expect(result.isErr()).toBe(true);
+  });
+
+  it('should reject burn from unauthorized user', () => {
+    const burnAmount = formatTokenAmount(100);
+
+    const result = simnet.callPublicFn(
+      'multi-token-nft',
+      'burn',
+      [principal(user1), uint(1), uint(burnAmount)],
+      creator1 // Creator trying to burn user1's tokens
+    );
+
+    expect(result.isErr()).toBe(true);
+  });
+
+  it('should handle complete token burn', () => {
+    const totalBalance = formatTokenAmount(500);
+
+    const result = simnet.callPublicFn(
+      'multi-token-nft',
+      'burn',
+      [principal(user1), uint(1), uint(totalBalance)],
+      user1
+    );
+
+    expect(result.isOk()).toBe(true);
+
+    // Verify balance is zero
+    const balanceResult = simnet.callReadOnlyFn(
+      'multi-token-nft',
+      'balance-of',
+      [principal(user1), uint(1)],
+      user1
+    );
+
+    expectEqual(balanceResult.value, Cl.ok(uint(0)));
+  });
 });
 
 describe('Multi-Token NFT - Read-Only Functions', () => {
