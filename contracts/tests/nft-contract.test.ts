@@ -196,3 +196,26 @@ describe('NFT Contract - Minting Operations', () => {
       expectEqual(owner.value, Cl.ok(some(principal(recipient))));
     }
   });
+describe('NFT Contract - Minting Access Control', () => {
+  let deployer: string;
+  let user1: string;
+  let user2: string;
+
+  beforeEach(() => {
+    const accounts = simnet.getAccounts();
+    deployer = accounts.get('deployer')!;
+    user1 = accounts.get('wallet_1')!;
+    user2 = accounts.get('wallet_2')!;
+  });
+
+  it('should reject minting from non-owner', () => {
+    const result = simnet.callPublicFn(
+      'nft-contract',
+      'mint',
+      [principal(user2)],
+      user1 // Non-owner trying to mint
+    );
+
+    expect(result.isErr()).toBe(true);
+    expectEqual(result.value, Cl.error(uint(100))); // ERR-OWNER-ONLY
+  });
