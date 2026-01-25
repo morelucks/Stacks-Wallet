@@ -335,3 +335,55 @@ describe('NFT Contract - Transfer Operations', () => {
 
     expectEqual(owner.value, Cl.ok(some(principal(user3))));
   });
+  it('should transfer token to contract owner', () => {
+    const result = simnet.callPublicFn(
+      'nft-contract',
+      'transfer',
+      [uint(1), principal(user1), principal(deployer)],
+      user1
+    );
+
+    expect(result.isOk()).toBe(true);
+
+    // Verify deployer now owns the token
+    const owner = simnet.callReadOnlyFn(
+      'nft-contract',
+      'get-owner',
+      [uint(1)],
+      deployer
+    );
+
+    expectEqual(owner.value, Cl.ok(some(principal(deployer))));
+  });
+
+  it('should verify ownership changes immediately after transfer', () => {
+    // Check initial ownership
+    const initialOwner = simnet.callReadOnlyFn(
+      'nft-contract',
+      'get-owner',
+      [uint(1)],
+      deployer
+    );
+
+    expectEqual(initialOwner.value, Cl.ok(some(principal(user1))));
+
+    // Transfer token
+    const result = simnet.callPublicFn(
+      'nft-contract',
+      'transfer',
+      [uint(1), principal(user1), principal(user2)],
+      user1
+    );
+
+    expect(result.isOk()).toBe(true);
+
+    // Check ownership changed immediately
+    const newOwner = simnet.callReadOnlyFn(
+      'nft-contract',
+      'get-owner',
+      [uint(1)],
+      deployer
+    );
+
+    expectEqual(newOwner.value, Cl.ok(some(principal(user2))));
+  });
