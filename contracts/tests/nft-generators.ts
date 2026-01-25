@@ -149,3 +149,56 @@ export const PROPERTY_TEST_CONFIG = {
   maxPrincipals: 10,
   maxOperations: 20
 } as const;
+/**
+ * Additional generators for edge cases
+ */
+
+/**
+ * Generate boundary value token IDs
+ */
+export function generateBoundaryTokenIds(): number[] {
+  return [
+    0,                    // Invalid: zero
+    1,                    // Valid: minimum
+    Number.MAX_SAFE_INTEGER, // Edge: maximum safe integer
+    -1,                   // Invalid: negative (will be converted to large uint)
+    999999999            // Large valid number
+  ];
+}
+
+/**
+ * Generate test scenarios for ownership chains
+ */
+export interface OwnershipChain {
+  tokenId: number;
+  owners: string[];
+}
+
+export function generateOwnershipChains(
+  tokenCount: number,
+  principals: string[],
+  chainLength: number
+): OwnershipChain[] {
+  const chains: OwnershipChain[] = [];
+  
+  for (let i = 1; i <= tokenCount; i++) {
+    const owners: string[] = [];
+    
+    // Initial owner
+    owners.push(principals[Math.floor(Math.random() * principals.length)]);
+    
+    // Chain of transfers
+    for (let j = 1; j < chainLength; j++) {
+      let nextOwner;
+      do {
+        nextOwner = principals[Math.floor(Math.random() * principals.length)];
+      } while (nextOwner === owners[owners.length - 1]); // Avoid self-transfer
+      
+      owners.push(nextOwner);
+    }
+    
+    chains.push({ tokenId: i, owners });
+  }
+  
+  return chains;
+}
