@@ -861,3 +861,55 @@ describe('NFT Contract - Integration Tests', () => {
     expectEqual(newOwner1.value, Cl.ok(some(principal(user2))));
     expectEqual(newOwner6.value, Cl.ok(some(principal(user1))));
   });
+  it('should handle complex ownership chains', () => {
+    // Create a complex ownership scenario
+    simnet.callPublicFn('nft-contract', 'mint', [principal(user1)], deployer);
+    simnet.callPublicFn('nft-contract', 'mint', [principal(user1)], deployer);
+    simnet.callPublicFn('nft-contract', 'mint', [principal(user1)], deployer);
+
+    // Create ownership chain: user1 -> user2 -> user3 -> deployer
+    simnet.callPublicFn('nft-contract', 'transfer', [uint(1), principal(user1), principal(user2)], user1);
+    simnet.callPublicFn('nft-contract', 'transfer', [uint(1), principal(user2), principal(user3)], user2);
+    simnet.callPublicFn('nft-contract', 'transfer', [uint(1), principal(user3), principal(deployer)], user3);
+
+    // Verify final ownership
+    const finalOwner = simnet.callReadOnlyFn('nft-contract', 'get-owner', [uint(1)], deployer);
+    expectEqual(finalOwner.value, Cl.ok(some(principal(deployer))));
+
+    // Verify other tokens still owned by user1
+    const owner2 = simnet.callReadOnlyFn('nft-contract', 'get-owner', [uint(2)], deployer);
+    const owner3 = simnet.callReadOnlyFn('nft-contract', 'get-owner', [uint(3)], deployer);
+
+    expectEqual(owner2.value, Cl.ok(some(principal(user1))));
+    expectEqual(owner3.value, Cl.ok(some(principal(user1))));
+  });
+
+  it('should verify state consistency across operations', () => {
+    // Perform mixed operations and verify consistency
+    const operations = [
+      () => simnet.callPublicFn('nft-contract', 'mint', [principal(user1)], deployer),
+      () => simnet.callPublicFn('nft-contract', 'mint', [principal(user2)], deployer),
+      () => simnet.callPublicFn('nft-contract', 'transfer', [uint(1), principal(user1), principal(user3)], user1),
+      () => simnet.callPublicFn('nft-contract', 'mint', [principal(user3)], deployer),
+      () => simnet.callPublicFn('nft-contract', 'transfer', [uint(2), principal(user2), principal(user1)], user2)
+    ];
+
+    // Execute operations and verify state after each
+    for (let i = 0; i < operations.length; i++) {
+      operations[i]();
+      
+      // Verify last-token-id is correct (should be number of mints so far)
+      const expectedMints = i < 2 ? i + 1 : i < 3 ? 2 : i < 4 ? 3 : 3;
+      const lastTokenId = simnet.callReadOnlyFn('nft-contract', 'get-last-token-id', [], deployer);
+      expectEqual(lastTokenId.value, Cl.ok(uint(expectedMints)));
+    }
+
+    // Verify final ownership state
+    const owner1 = simnet.callReadOnlyFn('nft-contract', 'get-owner', [uint(1)], deployer);
+    const owner2 = simnet.callReadOnlyFn('nft-contract', 'get-owner', [uint(2)], deployer);
+    const owner3 = simnet.callReadOnlyFn('nft-contract', 'get-owner', [uint(3)], deployer);
+
+    expectEqual(owner1.value, Cl.ok(some(principal(user3)))); // Transferred from user1 to user3
+    expectEqual(owner2.value, Cl.ok(some(principal(user1)))); // Transferred from user2 to user1
+    expectEqual(owner3.value, Cl.ok(some(principal(user3)))); // Minted to user3
+  });
