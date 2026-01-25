@@ -1138,3 +1138,34 @@ describe('NFT Contract - State Validation', () => {
     expectEqual(owner1.value, Cl.ok(some(principal(user1))));
     expectEqual(owner2.value, Cl.ok(none()));
   });
+describe('NFT Contract - Advanced Scenarios', () => {
+  let deployer: string;
+  let user1: string;
+  let user2: string;
+
+  beforeEach(() => {
+    const accounts = simnet.getAccounts();
+    deployer = accounts.get('deployer')!;
+    user1 = accounts.get('wallet_1')!;
+    user2 = accounts.get('wallet_2')!;
+  });
+
+  it('should handle interleaved mint and transfer operations', () => {
+    // Mint token 1
+    simnet.callPublicFn('nft-contract', 'mint', [principal(user1)], deployer);
+    
+    // Transfer token 1
+    simnet.callPublicFn('nft-contract', 'transfer', [uint(1), principal(user1), principal(user2)], user1);
+    
+    // Mint token 2
+    simnet.callPublicFn('nft-contract', 'mint', [principal(user1)], deployer);
+    
+    // Verify final state
+    const owner1 = simnet.callReadOnlyFn('nft-contract', 'get-owner', [uint(1)], deployer);
+    const owner2 = simnet.callReadOnlyFn('nft-contract', 'get-owner', [uint(2)], deployer);
+    const lastTokenId = simnet.callReadOnlyFn('nft-contract', 'get-last-token-id', [], deployer);
+
+    expectEqual(owner1.value, Cl.ok(some(principal(user2))));
+    expectEqual(owner2.value, Cl.ok(some(principal(user1))));
+    expectEqual(lastTokenId.value, Cl.ok(uint(2)));
+  });
