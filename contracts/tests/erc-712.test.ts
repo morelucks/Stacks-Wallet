@@ -133,4 +133,48 @@ describe('ERC-712 Contract Tests', () => {
       expect(Cl.unwrapUInt(result.value)).toBe(1n);
     });
   });
+
+  describe('Permit Functionality', () => {
+    it('should reject expired permits', () => {
+      const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
+      const expiredDeadline = simnet.blockHeight - 1; // Already expired
+      
+      const result = simnet.callPublicFn(
+        'erc-712',
+        'permit',
+        [
+          Cl.principal(wallet1),
+          Cl.principal(wallet2),
+          Cl.uint(1000),
+          Cl.uint(expiredDeadline),
+          mockSignature
+        ],
+        wallet1
+      );
+      
+      expect(result.isErr()).toBe(true);
+      expect(result.value.value).toBe(403); // ERR_EXPIRED
+    });
+
+    it('should reject invalid signatures', () => {
+      const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
+      const futureDeadline = simnet.blockHeight + 100;
+      
+      const result = simnet.callPublicFn(
+        'erc-712',
+        'permit',
+        [
+          Cl.principal(wallet1),
+          Cl.principal(wallet2),
+          Cl.uint(1000),
+          Cl.uint(futureDeadline),
+          mockSignature
+        ],
+        wallet1
+      );
+      
+      expect(result.isErr()).toBe(true);
+      expect(result.value.value).toBe(402); // ERR_INVALID_SIGNATURE
+    });
+  });
 });
