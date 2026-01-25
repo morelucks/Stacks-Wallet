@@ -977,4 +977,51 @@ describe('Multi-Token NFT - Read-Only Functions', () => {
     expect(result.isOk()).toBe(true);
     expect(result.value.value).toBeDefined();
   });
+
+  it('should handle non-existent token URI query', () => {
+    const result = simnet.callReadOnlyFn(
+      'multi-token-nft',
+      'get-token-uri',
+      [uint(999)], // Non-existent token
+      creator1
+    );
+
+    expect(result.isErr()).toBe(true);
+  });
+
+  it('should handle non-existent token info query', () => {
+    const result = simnet.callReadOnlyFn(
+      'multi-token-nft',
+      'get-token-info',
+      [uint(999)], // Non-existent token
+      creator1
+    );
+
+    expect(result.isErr()).toBe(true);
+  });
+
+  it('should validate token metadata structure', () => {
+    const result = simnet.callReadOnlyFn(
+      'multi-token-nft',
+      'get-token-info',
+      [uint(1)],
+      creator1
+    );
+
+    expect(result.isOk()).toBe(true);
+    // Verify the structure contains expected fields
+    const tokenInfo = result.value.value;
+    expect(tokenInfo).toBeDefined();
+  });
+
+  it('should handle balance query for non-existent token', () => {
+    const result = simnet.callReadOnlyFn(
+      'multi-token-nft',
+      'balance-of',
+      [principal(user1), uint(999)], // Non-existent token
+      creator1
+    );
+
+    expect(result.isErr()).toBe(true);
+  });
 });
