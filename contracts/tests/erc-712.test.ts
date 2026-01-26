@@ -1181,4 +1181,76 @@ describe('ERC-712 Contract Tests', () => {
       });
     });
   });
+
+  describe('State Consistency Across Operations', () => {
+    it('should maintain consistent state after multiple failed operations', () => {
+      const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
+      const futureDeadline = simnet.blockHeight + 100;
+      
+      // Get initial contract info
+      const initialInfo = simnet.callReadOnlyFn(
+        'erc-712',
+        'get-contract-info',
+        [],
+        deployer
+      );
+      
+      // Perform multiple operations
+      for (let i = 0; i < 3; i++) {
+        simnet.callPublicFn(
+          'erc-712',
+          'permit',
+          [
+            Cl.principal(wallet1),
+            Cl.principal(wallet2),
+            Cl.uint(1000 + i),
+            Cl.uint(futureDeadline),
+            mockSignature
+          ],
+          wallet1
+        );
+      }
+      
+      // Get final contract info
+      const finalInfo = simnet.callReadOnlyFn(
+        'erc-712',
+        'get-contract-info',
+        [],
+        deployer
+      );
+      
+      // Core metadata should remain consistent
+      const initial = Cl.unwrap(initialInfo.value);
+      const final = Cl.unwrap(finalInfo.value);
+      
+      expect(Cl.unwrapAscii(initial.name)).toBe(Cl.unwrapAscii(final.name));
+      expect(Cl.unwrapAscii(initial.version)).toBe(Cl.unwrapAscii(final.version));
+      expect(Cl.unwrapPrincipal(initial.owner)).toBe(Cl.unwrapPrincipal(final.owner));
+    });
+
+    it('should maintain domain separator consistency', () => {
+      const initialDomain = simnet.callReadOnlyFn(
+        'erc-712',
+        'get-domain-separator',
+        [],
+        deployer
+      );
+      
+      // Perform various operations
+      const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
+      simnet.callPublicFn('erc-712', 'permit', [
+        Cl.principal(wallet1), Cl.principal(wallet2), Cl.uint(1000),
+        Cl.uint(simnet.blockHeight + 100), mockSignature
+      ], wallet1);
+      
+      const finalDomain = simnet.callReadOnlyFn(
+        'erc-712',
+        'get-domain-separator',
+        [],
+        deployer
+      );
+      
+      expect(initialDomain.value).toEqual(finalDomain.value);
+    });
+  });
 });
