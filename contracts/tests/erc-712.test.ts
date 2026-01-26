@@ -993,4 +993,53 @@ describe('ERC-712 Contract Tests', () => {
       });
     });
   });
+
+  describe('Domain Separator Immutability', () => {
+    it('should return same domain separator across multiple calls', () => {
+      const results = [];
+      
+      // Call domain separator multiple times
+      for (let i = 0; i < 5; i++) {
+        const result = simnet.callReadOnlyFn(
+          'erc-712',
+          'get-domain-separator',
+          [],
+          deployer
+        );
+        results.push(result.value);
+      }
+      
+      // All results should be identical
+      results.forEach(result => {
+        expect(result).toEqual(results[0]);
+        expect(Cl.isBuff(result)).toBe(true);
+      });
+    });
+
+    it('should return same domain separator from different callers', () => {
+      const result1 = simnet.callReadOnlyFn(
+        'erc-712',
+        'get-domain-separator',
+        [],
+        deployer
+      );
+      
+      const result2 = simnet.callReadOnlyFn(
+        'erc-712',
+        'get-domain-separator',
+        [],
+        wallet1
+      );
+      
+      const result3 = simnet.callReadOnlyFn(
+        'erc-712',
+        'get-domain-separator',
+        [],
+        wallet2
+      );
+      
+      expect(result1.value).toEqual(result2.value);
+      expect(result2.value).toEqual(result3.value);
+    });
+  });
 });
