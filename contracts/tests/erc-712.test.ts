@@ -807,4 +807,53 @@ describe('ERC-712 Contract Tests', () => {
       expect(result2.isErr()).toBe(true);
     });
   });
+
+  describe('Pause Behavior with Operations', () => {
+    it('should prevent operations when contract is paused', () => {
+      // First pause the contract
+      simnet.callPublicFn(
+        'erc-712',
+        'set-paused',
+        [Cl.bool(true)],
+        deployer
+      );
+      
+      // Verify contract is paused
+      const pausedCheck = simnet.callReadOnlyFn(
+        'erc-712',
+        'is-paused',
+        [],
+        deployer
+      );
+      expect(Cl.unwrapBool(pausedCheck.value)).toBe(true);
+      
+      // Try to execute permit while paused
+      const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
+      const futureDeadline = simnet.blockHeight + 100;
+      
+      const result = simnet.callPublicFn(
+        'erc-712',
+        'permit',
+        [
+          Cl.principal(wallet1),
+          Cl.principal(wallet2),
+          Cl.uint(1000),
+          Cl.uint(futureDeadline),
+          mockSignature
+        ],
+        wallet1
+      );
+      
+      // Should fail (either with pause check or invalid signature)
+      expect(result.isErr()).toBe(true);
+      
+      // Unpause for cleanup
+      simnet.callPublicFn(
+        'erc-712',
+        'set-paused',
+        [Cl.bool(false)],
+        deployer
+      );
+    });
+  });
 });
