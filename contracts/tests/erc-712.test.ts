@@ -673,4 +673,45 @@ describe('ERC-712 Contract Tests', () => {
       expect(Cl.unwrapBool(result.value)).toBe(false);
     });
   });
+
+  describe('Principal Combinations', () => {
+    it('should handle permit with different principal combinations', () => {
+      const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
+      const futureDeadline = simnet.blockHeight + 100;
+      
+      // Test with wallet1 -> wallet2
+      const result1 = simnet.callPublicFn(
+        'erc-712',
+        'permit',
+        [
+          Cl.principal(wallet1),
+          Cl.principal(wallet2),
+          Cl.uint(1000),
+          Cl.uint(futureDeadline),
+          mockSignature
+        ],
+        wallet1
+      );
+      
+      expect(result1.isErr()).toBe(true);
+      
+      // Test with wallet2 -> wallet3
+      const result2 = simnet.callPublicFn(
+        'erc-712',
+        'permit',
+        [
+          Cl.principal(wallet2),
+          Cl.principal(wallet3),
+          Cl.uint(2000),
+          Cl.uint(futureDeadline),
+          mockSignature
+        ],
+        wallet2
+      );
+      
+      expect(result2.isErr()).toBe(true);
+      expect(result1.value.value).toBe(402);
+      expect(result2.value.value).toBe(402);
+    });
+  });
 });
