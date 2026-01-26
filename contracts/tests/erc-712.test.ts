@@ -856,4 +856,44 @@ describe('ERC-712 Contract Tests', () => {
       );
     });
   });
+
+  describe('Delegation Principal Variations', () => {
+    it('should handle delegation with different principal pairs', () => {
+      const mockSignature1 = Cl.bufferFromHex('0x' + '11'.repeat(32) + '00');
+      const mockSignature2 = Cl.bufferFromHex('0x' + '22'.repeat(32) + '00');
+      const futureTime = simnet.blockHeight + 100;
+      
+      // Test wallet1 -> wallet2 delegation
+      const result1 = simnet.callPublicFn(
+        'erc-712',
+        'delegate-by-sig',
+        [
+          Cl.principal(wallet1),
+          Cl.principal(wallet2),
+          Cl.uint(futureTime),
+          mockSignature1
+        ],
+        deployer
+      );
+      
+      expect(result1.isErr()).toBe(true);
+      expect(result1.value.value).toBe(402); // ERR_INVALID_SIGNATURE
+      
+      // Test wallet2 -> wallet3 delegation
+      const result2 = simnet.callPublicFn(
+        'erc-712',
+        'delegate-by-sig',
+        [
+          Cl.principal(wallet2),
+          Cl.principal(wallet3),
+          Cl.uint(futureTime),
+          mockSignature2
+        ],
+        deployer
+      );
+      
+      expect(result2.isErr()).toBe(true);
+      expect(result2.value.value).toBe(402); // ERR_INVALID_SIGNATURE
+    });
+  });
 });
