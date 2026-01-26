@@ -714,4 +714,50 @@ describe('ERC-712 Contract Tests', () => {
       expect(result2.value.value).toBe(402);
     });
   });
+
+  describe('Deadline Boundary Conditions', () => {
+    it('should handle deadline exactly at current block height', () => {
+      const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
+      const currentBlock = simnet.blockHeight;
+      
+      const result = simnet.callPublicFn(
+        'erc-712',
+        'permit',
+        [
+          Cl.principal(wallet1),
+          Cl.principal(wallet2),
+          Cl.uint(1000),
+          Cl.uint(currentBlock),
+          mockSignature
+        ],
+        wallet1
+      );
+      
+      // Should fail as deadline must be > block height
+      expect(result.isErr()).toBe(true);
+      expect(result.value.value).toBe(403); // ERR_EXPIRED
+    });
+
+    it('should handle deadline one block in the future', () => {
+      const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
+      const futureBlock = simnet.blockHeight + 1;
+      
+      const result = simnet.callPublicFn(
+        'erc-712',
+        'permit',
+        [
+          Cl.principal(wallet1),
+          Cl.principal(wallet2),
+          Cl.uint(1000),
+          Cl.uint(futureBlock),
+          mockSignature
+        ],
+        wallet1
+      );
+      
+      // Should fail with invalid signature, not expired
+      expect(result.isErr()).toBe(true);
+      expect(result.value.value).toBe(402); // ERR_INVALID_SIGNATURE
+    });
+  });
 });
