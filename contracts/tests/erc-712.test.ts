@@ -896,4 +896,49 @@ describe('ERC-712 Contract Tests', () => {
       expect(result2.value.value).toBe(402); // ERR_INVALID_SIGNATURE
     });
   });
+
+  describe('Batch Operations Limits', () => {
+    it('should handle batch operations with maximum number of operations', () => {
+      const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
+      const mockData = Cl.bufferFromHex('0x' + '00'.repeat(50));
+      
+      // Create a list with multiple operations (testing up to limit)
+      const maxOperations = Cl.list([
+        Cl.tuple({ to: Cl.principal(wallet2), value: Cl.uint(100), data: mockData }),
+        Cl.tuple({ to: Cl.principal(wallet3), value: Cl.uint(200), data: mockData }),
+        Cl.tuple({ to: Cl.principal(wallet1), value: Cl.uint(300), data: mockData })
+      ]);
+      
+      const result = simnet.callPublicFn(
+        'erc-712',
+        'execute-batch',
+        [maxOperations, mockSignature],
+        wallet1
+      );
+      
+      expect(result.isErr()).toBe(true);
+      expect(result.value.value).toBe(402); // ERR_INVALID_SIGNATURE
+    });
+
+    it('should handle batch operations with varying data sizes', () => {
+      const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
+      const smallData = Cl.bufferFromHex('0x' + '00'.repeat(10));
+      const largeData = Cl.bufferFromHex('0x' + '00'.repeat(200));
+      
+      const mixedOperations = Cl.list([
+        Cl.tuple({ to: Cl.principal(wallet2), value: Cl.uint(100), data: smallData }),
+        Cl.tuple({ to: Cl.principal(wallet3), value: Cl.uint(200), data: largeData })
+      ]);
+      
+      const result = simnet.callPublicFn(
+        'erc-712',
+        'execute-batch',
+        [mixedOperations, mockSignature],
+        wallet1
+      );
+      
+      expect(result.isErr()).toBe(true);
+      expect(result.value.value).toBe(402); // ERR_INVALID_SIGNATURE
+    });
+  });
 });
