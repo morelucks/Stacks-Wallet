@@ -1042,4 +1042,45 @@ describe('ERC-712 Contract Tests', () => {
       expect(result2.value).toEqual(result3.value);
     });
   });
+
+  describe('Multiple Users Nonce Management', () => {
+    it('should track nonces independently for different users', () => {
+      const users = [wallet1, wallet2, wallet3];
+      const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
+      const futureDeadline = simnet.blockHeight + 100;
+      
+      // Get initial nonces for all users
+      const initialNonces = users.map(user => {
+        const result = simnet.callReadOnlyFn(
+          'erc-712',
+          'get-nonce',
+          [Cl.principal(user)],
+          deployer
+        );
+        return Cl.unwrapUInt(result.value);
+      });
+      
+      // All should start at 0
+      initialNonces.forEach(nonce => {
+        expect(nonce).toBe(0n);
+      });
+      
+      // Attempt operations for each user
+      users.forEach(user => {
+        const result = simnet.callPublicFn(
+          'erc-712',
+          'permit',
+          [
+            Cl.principal(user),
+            Cl.principal(wallet1),
+            Cl.uint(1000),
+            Cl.uint(futureDeadline),
+            mockSignature
+          ],
+          user
+        );
+        expect(result.isErr()).toBe(true);
+      });
+    });
+  });
 });
