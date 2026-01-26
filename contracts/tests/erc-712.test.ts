@@ -1356,4 +1356,59 @@ describe('ERC-712 Contract Tests', () => {
       });
     });
   });
+
+  describe('Multiple Signature Attempts', () => {
+    it('should handle multiple permit attempts with different values', () => {
+      const futureDeadline = simnet.blockHeight + 100;
+      const signatures = [
+        Cl.bufferFromHex('0x' + 'AA'.repeat(32) + '00'),
+        Cl.bufferFromHex('0x' + 'BB'.repeat(32) + '00'),
+        Cl.bufferFromHex('0x' + 'CC'.repeat(32) + '00')
+      ];
+      const values = [1000, 2000, 3000];
+      
+      signatures.forEach((signature, index) => {
+        const result = simnet.callPublicFn(
+          'erc-712',
+          'permit',
+          [
+            Cl.principal(wallet1),
+            Cl.principal(wallet2),
+            Cl.uint(values[index]),
+            Cl.uint(futureDeadline),
+            signature
+          ],
+          wallet1
+        );
+        
+        expect(result.isErr()).toBe(true);
+        expect(result.value.value).toBe(402); // ERR_INVALID_SIGNATURE
+      });
+    });
+
+    it('should handle multiple delegation attempts with different signatures', () => {
+      const futureTime = simnet.blockHeight + 100;
+      const signatures = [
+        Cl.bufferFromHex('0x' + '11'.repeat(32) + '00'),
+        Cl.bufferFromHex('0x' + '22'.repeat(32) + '00')
+      ];
+      
+      signatures.forEach(signature => {
+        const result = simnet.callPublicFn(
+          'erc-712',
+          'delegate-by-sig',
+          [
+            Cl.principal(wallet1),
+            Cl.principal(wallet2),
+            Cl.uint(futureTime),
+            signature
+          ],
+          deployer
+        );
+        
+        expect(result.isErr()).toBe(true);
+        expect(result.value.value).toBe(402); // ERR_INVALID_SIGNATURE
+      });
+    });
+  });
 });
