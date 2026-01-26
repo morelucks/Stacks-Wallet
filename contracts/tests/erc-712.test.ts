@@ -1253,4 +1253,58 @@ describe('ERC-712 Contract Tests', () => {
       expect(initialDomain.value).toEqual(finalDomain.value);
     });
   });
+
+  describe('Error Code Validation', () => {
+    it('should return correct error codes for unauthorized access', () => {
+      const result = simnet.callPublicFn(
+        'erc-712',
+        'set-paused',
+        [Cl.bool(true)],
+        wallet1
+      );
+      
+      expect(result.isErr()).toBe(true);
+      expect(result.value.value).toBe(401); // ERR_UNAUTHORIZED
+    });
+
+    it('should return correct error codes for invalid signatures', () => {
+      const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
+      
+      const result = simnet.callPublicFn(
+        'erc-712',
+        'permit',
+        [
+          Cl.principal(wallet1),
+          Cl.principal(wallet2),
+          Cl.uint(1000),
+          Cl.uint(simnet.blockHeight + 100),
+          mockSignature
+        ],
+        wallet1
+      );
+      
+      expect(result.isErr()).toBe(true);
+      expect(result.value.value).toBe(402); // ERR_INVALID_SIGNATURE
+    });
+
+    it('should return correct error codes for expired operations', () => {
+      const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
+      
+      const result = simnet.callPublicFn(
+        'erc-712',
+        'permit',
+        [
+          Cl.principal(wallet1),
+          Cl.principal(wallet2),
+          Cl.uint(1000),
+          Cl.uint(simnet.blockHeight - 1),
+          mockSignature
+        ],
+        wallet1
+      );
+      
+      expect(result.isErr()).toBe(true);
+      expect(result.value.value).toBe(403); // ERR_EXPIRED
+    });
+  });
 });
