@@ -1411,4 +1411,63 @@ describe('ERC-712 Contract Tests', () => {
       });
     });
   });
+
+  describe('Chain ID Verification', () => {
+    it('should return consistent chain ID across multiple calls', () => {
+      const chainIds = [];
+      
+      for (let i = 0; i < 5; i++) {
+        const result = simnet.callReadOnlyFn(
+          'erc-712',
+          'get-chain-id',
+          [],
+          deployer
+        );
+        chainIds.push(Cl.unwrapUInt(result.value));
+      }
+      
+      chainIds.forEach(chainId => {
+        expect(chainId).toBe(1n);
+      });
+    });
+
+    it('should match chain ID in contract info', () => {
+      const chainIdResult = simnet.callReadOnlyFn(
+        'erc-712',
+        'get-chain-id',
+        [],
+        deployer
+      );
+      
+      const infoResult = simnet.callReadOnlyFn(
+        'erc-712',
+        'get-contract-info',
+        [],
+        deployer
+      );
+      
+      const chainId = Cl.unwrapUInt(chainIdResult.value);
+      const info = Cl.unwrap(infoResult.value);
+      const infoChainId = Cl.unwrapUInt(info['chain-id']);
+      
+      expect(chainId).toBe(infoChainId);
+      expect(chainId).toBe(1n);
+    });
+
+    it('should return chain ID from different callers', () => {
+      const callers = [deployer, wallet1, wallet2];
+      
+      callers.forEach(caller => {
+        const result = simnet.callReadOnlyFn(
+          'erc-712',
+          'get-chain-id',
+          [],
+          caller
+        );
+        
+        expect(result.isOk()).toBe(true);
+        expect(Cl.unwrapUInt(result.value)).toBe(1n);
+      });
+    });
+  });
 });
