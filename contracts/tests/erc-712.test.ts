@@ -1307,4 +1307,53 @@ describe('ERC-712 Contract Tests', () => {
       expect(result.value.value).toBe(403); // ERR_EXPIRED
     });
   });
+
+  describe('Contract Info Consistency', () => {
+    it('should maintain contract info after pause/unpause cycles', () => {
+      const initialInfo = simnet.callReadOnlyFn(
+        'erc-712',
+        'get-contract-info',
+        [],
+        deployer
+      );
+      
+      // Pause
+      simnet.callPublicFn('erc-712', 'set-paused', [Cl.bool(true)], deployer);
+      
+      // Unpause
+      simnet.callPublicFn('erc-712', 'set-paused', [Cl.bool(false)], deployer);
+      
+      const finalInfo = simnet.callReadOnlyFn(
+        'erc-712',
+        'get-contract-info',
+        [],
+        deployer
+      );
+      
+      const initial = Cl.unwrap(initialInfo.value);
+      const final = Cl.unwrap(finalInfo.value);
+      
+      expect(Cl.unwrapAscii(initial.name)).toBe(Cl.unwrapAscii(final.name));
+      expect(Cl.unwrapAscii(initial.version)).toBe(Cl.unwrapAscii(final.version));
+      expect(Cl.unwrapPrincipal(initial.owner)).toBe(Cl.unwrapPrincipal(final.owner));
+    });
+
+    it('should return consistent contract version across calls', () => {
+      const versions = [];
+      
+      for (let i = 0; i < 5; i++) {
+        const result = simnet.callReadOnlyFn(
+          'erc-712',
+          'get-contract-version',
+          [],
+          deployer
+        );
+        versions.push(Cl.unwrapAscii(result.value));
+      }
+      
+      versions.forEach(version => {
+        expect(version).toBe('1');
+      });
+    });
+  });
 });
