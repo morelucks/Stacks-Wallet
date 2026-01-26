@@ -1253,4 +1253,505 @@ describe('ERC-712 Contract Tests', () => {
       expect(initialDomain.value).toEqual(finalDomain.value);
     });
   });
+
+  describe('Error Code Validation', () => {
+    it('should return correct error codes for unauthorized access', () => {
+      const result = simnet.callPublicFn(
+        'erc-712',
+        'set-paused',
+        [Cl.bool(true)],
+        wallet1
+      );
+      
+      expect(result.isErr()).toBe(true);
+      expect(result.value.value).toBe(401); // ERR_UNAUTHORIZED
+    });
+
+    it('should return correct error codes for invalid signatures', () => {
+      const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
+      
+      const result = simnet.callPublicFn(
+        'erc-712',
+        'permit',
+        [
+          Cl.principal(wallet1),
+          Cl.principal(wallet2),
+          Cl.uint(1000),
+          Cl.uint(simnet.blockHeight + 100),
+          mockSignature
+        ],
+        wallet1
+      );
+      
+      expect(result.isErr()).toBe(true);
+      expect(result.value.value).toBe(402); // ERR_INVALID_SIGNATURE
+    });
+
+    it('should return correct error codes for expired operations', () => {
+      const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
+      
+      const result = simnet.callPublicFn(
+        'erc-712',
+        'permit',
+        [
+          Cl.principal(wallet1),
+          Cl.principal(wallet2),
+          Cl.uint(1000),
+          Cl.uint(simnet.blockHeight - 1),
+          mockSignature
+        ],
+        wallet1
+      );
+      
+      expect(result.isErr()).toBe(true);
+      expect(result.value.value).toBe(403); // ERR_EXPIRED
+    });
+  });
+
+  describe('Contract Info Consistency', () => {
+    it('should maintain contract info after pause/unpause cycles', () => {
+      const initialInfo = simnet.callReadOnlyFn(
+        'erc-712',
+        'get-contract-info',
+        [],
+        deployer
+      );
+      
+      // Pause
+      simnet.callPublicFn('erc-712', 'set-paused', [Cl.bool(true)], deployer);
+      
+      // Unpause
+      simnet.callPublicFn('erc-712', 'set-paused', [Cl.bool(false)], deployer);
+      
+      const finalInfo = simnet.callReadOnlyFn(
+        'erc-712',
+        'get-contract-info',
+        [],
+        deployer
+      );
+      
+      const initial = Cl.unwrap(initialInfo.value);
+      const final = Cl.unwrap(finalInfo.value);
+      
+      expect(Cl.unwrapAscii(initial.name)).toBe(Cl.unwrapAscii(final.name));
+      expect(Cl.unwrapAscii(initial.version)).toBe(Cl.unwrapAscii(final.version));
+      expect(Cl.unwrapPrincipal(initial.owner)).toBe(Cl.unwrapPrincipal(final.owner));
+    });
+
+    it('should return consistent contract version across calls', () => {
+      const versions = [];
+      
+      for (let i = 0; i < 5; i++) {
+        const result = simnet.callReadOnlyFn(
+          'erc-712',
+          'get-contract-version',
+          [],
+          deployer
+        );
+        versions.push(Cl.unwrapAscii(result.value));
+      }
+      
+      versions.forEach(version => {
+        expect(version).toBe('1');
+      });
+    });
+  });
+
+  describe('Multiple Signature Attempts', () => {
+    it('should handle multiple permit attempts with different values', () => {
+      const futureDeadline = simnet.blockHeight + 100;
+      const signatures = [
+        Cl.bufferFromHex('0x' + 'AA'.repeat(32) + '00'),
+        Cl.bufferFromHex('0x' + 'BB'.repeat(32) + '00'),
+        Cl.bufferFromHex('0x' + 'CC'.repeat(32) + '00')
+      ];
+      const values = [1000, 2000, 3000];
+      
+      signatures.forEach((signature, index) => {
+        const result = simnet.callPublicFn(
+          'erc-712',
+          'permit',
+          [
+            Cl.principal(wallet1),
+            Cl.principal(wallet2),
+            Cl.uint(values[index]),
+            Cl.uint(futureDeadline),
+            signature
+          ],
+          wallet1
+        );
+        
+        expect(result.isErr()).toBe(true);
+        expect(result.value.value).toBe(402); // ERR_INVALID_SIGNATURE
+      });
+    });
+
+    it('should handle multiple delegation attempts with different signatures', () => {
+      const futureTime = simnet.blockHeight + 100;
+      const signatures = [
+        Cl.bufferFromHex('0x' + '11'.repeat(32) + '00'),
+        Cl.bufferFromHex('0x' + '22'.repeat(32) + '00')
+      ];
+      
+      signatures.forEach(signature => {
+        const result = simnet.callPublicFn(
+          'erc-712',
+          'delegate-by-sig',
+          [
+            Cl.principal(wallet1),
+            Cl.principal(wallet2),
+            Cl.uint(futureTime),
+            signature
+          ],
+          deployer
+        );
+        
+        expect(result.isErr()).toBe(true);
+        expect(result.value.value).toBe(402); // ERR_INVALID_SIGNATURE
+      });
+    });
+  });
+
+  describe('Chain ID Verification', () => {
+    it('should return consistent chain ID across multiple calls', () => {
+      const chainIds = [];
+      
+      for (let i = 0; i < 5; i++) {
+        const result = simnet.callReadOnlyFn(
+          'erc-712',
+          'get-chain-id',
+          [],
+          deployer
+        );
+        chainIds.push(Cl.unwrapUInt(result.value));
+      }
+      
+      chainIds.forEach(chainId => {
+        expect(chainId).toBe(1n);
+      });
+    });
+
+    it('should match chain ID in contract info', () => {
+      const chainIdResult = simnet.callReadOnlyFn(
+        'erc-712',
+        'get-chain-id',
+        [],
+        deployer
+      );
+      
+      const infoResult = simnet.callReadOnlyFn(
+        'erc-712',
+        'get-contract-info',
+        [],
+        deployer
+      );
+      
+      const chainId = Cl.unwrapUInt(chainIdResult.value);
+      const info = Cl.unwrap(infoResult.value);
+      const infoChainId = Cl.unwrapUInt(info['chain-id']);
+      
+      expect(chainId).toBe(infoChainId);
+      expect(chainId).toBe(1n);
+    });
+
+    it('should return chain ID from different callers', () => {
+      const callers = [deployer, wallet1, wallet2];
+      
+      callers.forEach(caller => {
+        const result = simnet.callReadOnlyFn(
+          'erc-712',
+          'get-chain-id',
+          [],
+          caller
+        );
+        
+        expect(result.isOk()).toBe(true);
+        expect(Cl.unwrapUInt(result.value)).toBe(1n);
+      });
+    });
+  });
+
+  describe('Contract Name and Version Consistency', () => {
+    it('should return consistent contract name across calls', () => {
+      const names = [];
+      
+      for (let i = 0; i < 5; i++) {
+        const result = simnet.callReadOnlyFn(
+          'erc-712',
+          'get-contract-name',
+          [],
+          deployer
+        );
+        names.push(Cl.unwrapAscii(result.value));
+      }
+      
+      names.forEach(name => {
+        expect(name).toBe('ERC712Contract');
+      });
+    });
+
+    it('should match contract name in contract info', () => {
+      const nameResult = simnet.callReadOnlyFn(
+        'erc-712',
+        'get-contract-name',
+        [],
+        deployer
+      );
+      
+      const infoResult = simnet.callReadOnlyFn(
+        'erc-712',
+        'get-contract-info',
+        [],
+        deployer
+      );
+      
+      const name = Cl.unwrapAscii(nameResult.value);
+      const info = Cl.unwrap(infoResult.value);
+      const infoName = Cl.unwrapAscii(info.name);
+      
+      expect(name).toBe(infoName);
+      expect(name).toBe('ERC712Contract');
+    });
+
+    it('should match contract version in contract info', () => {
+      const versionResult = simnet.callReadOnlyFn(
+        'erc-712',
+        'get-contract-version',
+        [],
+        deployer
+      );
+      
+      const infoResult = simnet.callReadOnlyFn(
+        'erc-712',
+        'get-contract-info',
+        [],
+        deployer
+      );
+      
+      const version = Cl.unwrapAscii(versionResult.value);
+      const info = Cl.unwrap(infoResult.value);
+      const infoVersion = Cl.unwrapAscii(info.version);
+      
+      expect(version).toBe(infoVersion);
+      expect(version).toBe('1');
+    });
+  });
+
+  describe('Typed Data Hash Consistency', () => {
+    it('should return consistent typed data hash for same input', () => {
+      const structHash = Cl.bufferFromHex('0x' + '12'.repeat(32));
+      
+      const result1 = simnet.callReadOnlyFn(
+        'erc-712',
+        'get-typed-data-hash',
+        [structHash],
+        deployer
+      );
+      
+      const result2 = simnet.callReadOnlyFn(
+        'erc-712',
+        'get-typed-data-hash',
+        [structHash],
+        wallet1
+      );
+      
+      expect(result1.value).toEqual(result2.value);
+      expect(Cl.isBuff(result1.value)).toBe(true);
+    });
+
+    it('should return different hashes for different inputs', () => {
+      const hash1 = Cl.bufferFromHex('0x' + '11'.repeat(32));
+      const hash2 = Cl.bufferFromHex('0x' + '22'.repeat(32));
+      
+      const result1 = simnet.callReadOnlyFn(
+        'erc-712',
+        'get-typed-data-hash',
+        [hash1],
+        deployer
+      );
+      
+      const result2 = simnet.callReadOnlyFn(
+        'erc-712',
+        'get-typed-data-hash',
+        [hash2],
+        deployer
+      );
+      
+      expect(result1.value).not.toEqual(result2.value);
+      expect(Cl.isBuff(result1.value)).toBe(true);
+      expect(Cl.isBuff(result2.value)).toBe(true);
+    });
+
+    it('should return 32-byte hash for all inputs', () => {
+      const hashes = [
+        Cl.bufferFromHex('0x' + 'AA'.repeat(32)),
+        Cl.bufferFromHex('0x' + 'BB'.repeat(32)),
+        Cl.bufferFromHex('0x' + 'CC'.repeat(32))
+      ];
+      
+      hashes.forEach(hash => {
+        const result = simnet.callReadOnlyFn(
+          'erc-712',
+          'get-typed-data-hash',
+          [hash],
+          deployer
+        );
+        
+        expect(result.isOk()).toBe(true);
+        const hashBuffer = Cl.unwrapBuff(result.value);
+        expect(hashBuffer.length).toBe(32);
+      });
+    });
+  });
+
+  describe('Batch Operations Edge Cases', () => {
+    it('should handle batch operations with zero values', () => {
+      const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
+      const mockData = Cl.bufferFromHex('0x' + '00'.repeat(50));
+      
+      const zeroValueOperations = Cl.list([
+        Cl.tuple({
+          to: Cl.principal(wallet2),
+          value: Cl.uint(0),
+          data: mockData
+        })
+      ]);
+      
+      const result = simnet.callPublicFn(
+        'erc-712',
+        'execute-batch',
+        [zeroValueOperations, mockSignature],
+        wallet1
+      );
+      
+      expect(result.isErr()).toBe(true);
+      expect(result.value.value).toBe(402); // ERR_INVALID_SIGNATURE
+    });
+
+    it('should handle batch operations with same recipient multiple times', () => {
+      const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
+      const mockData = Cl.bufferFromHex('0x' + '00'.repeat(50));
+      
+      const sameRecipientOperations = Cl.list([
+        Cl.tuple({
+          to: Cl.principal(wallet2),
+          value: Cl.uint(100),
+          data: mockData
+        }),
+        Cl.tuple({
+          to: Cl.principal(wallet2),
+          value: Cl.uint(200),
+          data: mockData
+        })
+      ]);
+      
+      const result = simnet.callPublicFn(
+        'erc-712',
+        'execute-batch',
+        [sameRecipientOperations, mockSignature],
+        wallet1
+      );
+      
+      expect(result.isErr()).toBe(true);
+      expect(result.value.value).toBe(402); // ERR_INVALID_SIGNATURE
+    });
+
+    it('should handle batch operations with empty data buffers', () => {
+      const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
+      const emptyData = Cl.bufferFromHex('0x');
+      
+      const emptyDataOperations = Cl.list([
+        Cl.tuple({
+          to: Cl.principal(wallet2),
+          value: Cl.uint(100),
+          data: emptyData
+        })
+      ]);
+      
+      const result = simnet.callPublicFn(
+        'erc-712',
+        'execute-batch',
+        [emptyDataOperations, mockSignature],
+        wallet1
+      );
+      
+      expect(result.isErr()).toBe(true);
+      expect(result.value.value).toBe(402); // ERR_INVALID_SIGNATURE
+    });
+  });
+
+  describe('Delegation Edge Cases', () => {
+    it('should handle delegation with same delegator and delegatee', () => {
+      const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
+      const futureTime = simnet.blockHeight + 100;
+      
+      const result = simnet.callPublicFn(
+        'erc-712',
+        'delegate-by-sig',
+        [
+          Cl.principal(wallet1),
+          Cl.principal(wallet1), // Same as delegator
+          Cl.uint(futureTime),
+          mockSignature
+        ],
+        deployer
+      );
+      
+      expect(result.isErr()).toBe(true);
+      expect(result.value.value).toBe(402); // ERR_INVALID_SIGNATURE
+    });
+
+    it('should handle delegation queries for non-existent delegations', () => {
+      const users = [wallet1, wallet2, wallet3];
+      
+      users.forEach(user => {
+        const result = simnet.callReadOnlyFn(
+          'erc-712',
+          'get-delegate',
+          [Cl.principal(user)],
+          deployer
+        );
+        
+        expect(result.isOk()).toBe(true);
+        expect(Cl.isNone(result.value)).toBe(true);
+      });
+    });
+
+    it('should handle delegation with boundary expiry times', () => {
+      const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
+      const currentBlock = simnet.blockHeight;
+      
+      // Test with current block (should be expired)
+      const result1 = simnet.callPublicFn(
+        'erc-712',
+        'delegate-by-sig',
+        [
+          Cl.principal(wallet1),
+          Cl.principal(wallet2),
+          Cl.uint(currentBlock),
+          mockSignature
+        ],
+        deployer
+      );
+      
+      expect(result1.isErr()).toBe(true);
+      expect(result1.value.value).toBe(403); // ERR_EXPIRED
+      
+      // Test with future block
+      const result2 = simnet.callPublicFn(
+        'erc-712',
+        'delegate-by-sig',
+        [
+          Cl.principal(wallet1),
+          Cl.principal(wallet2),
+          Cl.uint(currentBlock + 1),
+          mockSignature
+        ],
+        deployer
+      );
+      
+      expect(result2.isErr()).toBe(true);
+      expect(result2.value.value).toBe(402); // ERR_INVALID_SIGNATURE
+    });
+  });
 });
