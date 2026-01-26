@@ -1083,4 +1083,49 @@ describe('ERC-712 Contract Tests', () => {
       });
     });
   });
+
+  describe('Signature Verification Hash Sizes', () => {
+    it('should handle signature verification with different struct hash values', () => {
+      const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
+      const hashValues = [
+        Cl.bufferFromHex('0x' + '11'.repeat(32)),
+        Cl.bufferFromHex('0x' + '22'.repeat(32)),
+        Cl.bufferFromHex('0x' + '33'.repeat(32))
+      ];
+      
+      hashValues.forEach(hash => {
+        const result = simnet.callReadOnlyFn(
+          'erc-712',
+          'is-valid-signature',
+          [hash, mockSignature, Cl.principal(wallet1)],
+          deployer
+        );
+        
+        expect(result.isOk()).toBe(true);
+        expect(Cl.unwrapBool(result.value)).toBe(false);
+      });
+    });
+
+    it('should verify typed data hash generation with different inputs', () => {
+      const hashInputs = [
+        Cl.bufferFromHex('0x' + 'AA'.repeat(32)),
+        Cl.bufferFromHex('0x' + 'BB'.repeat(32)),
+        Cl.bufferFromHex('0x' + 'CC'.repeat(32))
+      ];
+      
+      hashInputs.forEach(hash => {
+        const result = simnet.callReadOnlyFn(
+          'erc-712',
+          'get-typed-data-hash',
+          [hash],
+          deployer
+        );
+        
+        expect(result.isOk()).toBe(true);
+        expect(Cl.isBuff(result.value)).toBe(true);
+        const hashBuffer = Cl.unwrapBuff(result.value);
+        expect(hashBuffer.length).toBe(32);
+      });
+    });
+  });
 });
