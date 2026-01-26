@@ -1128,4 +1128,57 @@ describe('ERC-712 Contract Tests', () => {
       });
     });
   });
+
+  describe('Emergency Functions Multiple Users', () => {
+    it('should allow owner to invalidate nonces for multiple users', () => {
+      const users = [wallet1, wallet2, wallet3];
+      
+      users.forEach(user => {
+        // Get initial nonce
+        const initialNonce = simnet.callReadOnlyFn(
+          'erc-712',
+          'get-nonce',
+          [Cl.principal(user)],
+          deployer
+        );
+        const initialValue = Cl.unwrapUInt(initialNonce.value);
+        
+        // Emergency invalidate
+        const result = simnet.callPublicFn(
+          'erc-712',
+          'emergency-invalidate-nonce',
+          [Cl.principal(user)],
+          deployer
+        );
+        
+        expect(result.isOk()).toBe(true);
+        
+        // Check new nonce
+        const newNonce = simnet.callReadOnlyFn(
+          'erc-712',
+          'get-nonce',
+          [Cl.principal(user)],
+          deployer
+        );
+        
+        expect(Cl.unwrapUInt(newNonce.value)).toBe(initialValue + 1000n);
+      });
+    });
+
+    it('should reject emergency invalidation from non-owners', () => {
+      const users = [wallet1, wallet2];
+      
+      users.forEach(caller => {
+        const result = simnet.callPublicFn(
+          'erc-712',
+          'emergency-invalidate-nonce',
+          [Cl.principal(wallet3)],
+          caller
+        );
+        
+        expect(result.isErr()).toBe(true);
+        expect(result.value.value).toBe(401); // ERR_UNAUTHORIZED
+      });
+    });
+  });
 });
