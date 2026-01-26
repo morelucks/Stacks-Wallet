@@ -1536,4 +1536,71 @@ describe('ERC-712 Contract Tests', () => {
       expect(version).toBe('1');
     });
   });
+
+  describe('Typed Data Hash Consistency', () => {
+    it('should return consistent typed data hash for same input', () => {
+      const structHash = Cl.bufferFromHex('0x' + '12'.repeat(32));
+      
+      const result1 = simnet.callReadOnlyFn(
+        'erc-712',
+        'get-typed-data-hash',
+        [structHash],
+        deployer
+      );
+      
+      const result2 = simnet.callReadOnlyFn(
+        'erc-712',
+        'get-typed-data-hash',
+        [structHash],
+        wallet1
+      );
+      
+      expect(result1.value).toEqual(result2.value);
+      expect(Cl.isBuff(result1.value)).toBe(true);
+    });
+
+    it('should return different hashes for different inputs', () => {
+      const hash1 = Cl.bufferFromHex('0x' + '11'.repeat(32));
+      const hash2 = Cl.bufferFromHex('0x' + '22'.repeat(32));
+      
+      const result1 = simnet.callReadOnlyFn(
+        'erc-712',
+        'get-typed-data-hash',
+        [hash1],
+        deployer
+      );
+      
+      const result2 = simnet.callReadOnlyFn(
+        'erc-712',
+        'get-typed-data-hash',
+        [hash2],
+        deployer
+      );
+      
+      expect(result1.value).not.toEqual(result2.value);
+      expect(Cl.isBuff(result1.value)).toBe(true);
+      expect(Cl.isBuff(result2.value)).toBe(true);
+    });
+
+    it('should return 32-byte hash for all inputs', () => {
+      const hashes = [
+        Cl.bufferFromHex('0x' + 'AA'.repeat(32)),
+        Cl.bufferFromHex('0x' + 'BB'.repeat(32)),
+        Cl.bufferFromHex('0x' + 'CC'.repeat(32))
+      ];
+      
+      hashes.forEach(hash => {
+        const result = simnet.callReadOnlyFn(
+          'erc-712',
+          'get-typed-data-hash',
+          [hash],
+          deployer
+        );
+        
+        expect(result.isOk()).toBe(true);
+        const hashBuffer = Cl.unwrapBuff(result.value);
+        expect(hashBuffer.length).toBe(32);
+      });
+    });
+  });
 });
