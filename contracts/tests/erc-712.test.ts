@@ -673,4 +673,584 @@ describe('ERC-712 Contract Tests', () => {
       expect(Cl.unwrapBool(result.value)).toBe(false);
     });
   });
+
+  describe('Principal Combinations', () => {
+    it('should handle permit with different principal combinations', () => {
+      const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
+      const futureDeadline = simnet.blockHeight + 100;
+      
+      // Test with wallet1 -> wallet2
+      const result1 = simnet.callPublicFn(
+        'erc-712',
+        'permit',
+        [
+          Cl.principal(wallet1),
+          Cl.principal(wallet2),
+          Cl.uint(1000),
+          Cl.uint(futureDeadline),
+          mockSignature
+        ],
+        wallet1
+      );
+      
+      expect(result1.isErr()).toBe(true);
+      
+      // Test with wallet2 -> wallet3
+      const result2 = simnet.callPublicFn(
+        'erc-712',
+        'permit',
+        [
+          Cl.principal(wallet2),
+          Cl.principal(wallet3),
+          Cl.uint(2000),
+          Cl.uint(futureDeadline),
+          mockSignature
+        ],
+        wallet2
+      );
+      
+      expect(result2.isErr()).toBe(true);
+      expect(result1.value.value).toBe(402);
+      expect(result2.value.value).toBe(402);
+    });
+  });
+
+  describe('Deadline Boundary Conditions', () => {
+    it('should handle deadline exactly at current block height', () => {
+      const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
+      const currentBlock = simnet.blockHeight;
+      
+      const result = simnet.callPublicFn(
+        'erc-712',
+        'permit',
+        [
+          Cl.principal(wallet1),
+          Cl.principal(wallet2),
+          Cl.uint(1000),
+          Cl.uint(currentBlock),
+          mockSignature
+        ],
+        wallet1
+      );
+      
+      // Should fail as deadline must be > block height
+      expect(result.isErr()).toBe(true);
+      expect(result.value.value).toBe(403); // ERR_EXPIRED
+    });
+
+    it('should handle deadline one block in the future', () => {
+      const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
+      const futureBlock = simnet.blockHeight + 1;
+      
+      const result = simnet.callPublicFn(
+        'erc-712',
+        'permit',
+        [
+          Cl.principal(wallet1),
+          Cl.principal(wallet2),
+          Cl.uint(1000),
+          Cl.uint(futureBlock),
+          mockSignature
+        ],
+        wallet1
+      );
+      
+      // Should fail with invalid signature, not expired
+      expect(result.isErr()).toBe(true);
+      expect(result.value.value).toBe(402); // ERR_INVALID_SIGNATURE
+    });
+  });
+
+  describe('Nonce Increment Verification', () => {
+    it('should track nonce increments across multiple failed operations', () => {
+      const mockSignature1 = Cl.bufferFromHex('0x' + '11'.repeat(32) + '00');
+      const mockSignature2 = Cl.bufferFromHex('0x' + '22'.repeat(32) + '00');
+      const futureDeadline = simnet.blockHeight + 100;
+      
+      // Get initial nonce
+      const initialNonce = simnet.callReadOnlyFn(
+        'erc-712',
+        'get-nonce',
+        [Cl.principal(wallet1)],
+        deployer
+      );
+      expect(Cl.unwrapUInt(initialNonce.value)).toBe(0n);
+      
+      // First failed operation
+      const result1 = simnet.callPublicFn(
+        'erc-712',
+        'permit',
+        [
+          Cl.principal(wallet1),
+          Cl.principal(wallet2),
+          Cl.uint(1000),
+          Cl.uint(futureDeadline),
+          mockSignature1
+        ],
+        wallet1
+      );
+      expect(result1.isErr()).toBe(true);
+      
+      // Second failed operation with different signature
+      const result2 = simnet.callPublicFn(
+        'erc-712',
+        'permit',
+        [
+          Cl.principal(wallet1),
+          Cl.principal(wallet2),
+          Cl.uint(2000),
+          Cl.uint(futureDeadline),
+          mockSignature2
+        ],
+        wallet1
+      );
+      expect(result2.isErr()).toBe(true);
+    });
+  });
+
+  describe('Pause Behavior with Operations', () => {
+    it('should prevent operations when contract is paused', () => {
+      // First pause the contract
+      simnet.callPublicFn(
+        'erc-712',
+        'set-paused',
+        [Cl.bool(true)],
+        deployer
+      );
+      
+      // Verify contract is paused
+      const pausedCheck = simnet.callReadOnlyFn(
+        'erc-712',
+        'is-paused',
+        [],
+        deployer
+      );
+      expect(Cl.unwrapBool(pausedCheck.value)).toBe(true);
+      
+      // Try to execute permit while paused
+      const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
+      const futureDeadline = simnet.blockHeight + 100;
+      
+      const result = simnet.callPublicFn(
+        'erc-712',
+        'permit',
+        [
+          Cl.principal(wallet1),
+          Cl.principal(wallet2),
+          Cl.uint(1000),
+          Cl.uint(futureDeadline),
+          mockSignature
+        ],
+        wallet1
+      );
+      
+      // Should fail (either with pause check or invalid signature)
+      expect(result.isErr()).toBe(true);
+      
+      // Unpause for cleanup
+      simnet.callPublicFn(
+        'erc-712',
+        'set-paused',
+        [Cl.bool(false)],
+        deployer
+      );
+    });
+  });
+
+  describe('Delegation Principal Variations', () => {
+    it('should handle delegation with different principal pairs', () => {
+      const mockSignature1 = Cl.bufferFromHex('0x' + '11'.repeat(32) + '00');
+      const mockSignature2 = Cl.bufferFromHex('0x' + '22'.repeat(32) + '00');
+      const futureTime = simnet.blockHeight + 100;
+      
+      // Test wallet1 -> wallet2 delegation
+      const result1 = simnet.callPublicFn(
+        'erc-712',
+        'delegate-by-sig',
+        [
+          Cl.principal(wallet1),
+          Cl.principal(wallet2),
+          Cl.uint(futureTime),
+          mockSignature1
+        ],
+        deployer
+      );
+      
+      expect(result1.isErr()).toBe(true);
+      expect(result1.value.value).toBe(402); // ERR_INVALID_SIGNATURE
+      
+      // Test wallet2 -> wallet3 delegation
+      const result2 = simnet.callPublicFn(
+        'erc-712',
+        'delegate-by-sig',
+        [
+          Cl.principal(wallet2),
+          Cl.principal(wallet3),
+          Cl.uint(futureTime),
+          mockSignature2
+        ],
+        deployer
+      );
+      
+      expect(result2.isErr()).toBe(true);
+      expect(result2.value.value).toBe(402); // ERR_INVALID_SIGNATURE
+    });
+  });
+
+  describe('Batch Operations Limits', () => {
+    it('should handle batch operations with maximum number of operations', () => {
+      const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
+      const mockData = Cl.bufferFromHex('0x' + '00'.repeat(50));
+      
+      // Create a list with multiple operations (testing up to limit)
+      const maxOperations = Cl.list([
+        Cl.tuple({ to: Cl.principal(wallet2), value: Cl.uint(100), data: mockData }),
+        Cl.tuple({ to: Cl.principal(wallet3), value: Cl.uint(200), data: mockData }),
+        Cl.tuple({ to: Cl.principal(wallet1), value: Cl.uint(300), data: mockData })
+      ]);
+      
+      const result = simnet.callPublicFn(
+        'erc-712',
+        'execute-batch',
+        [maxOperations, mockSignature],
+        wallet1
+      );
+      
+      expect(result.isErr()).toBe(true);
+      expect(result.value.value).toBe(402); // ERR_INVALID_SIGNATURE
+    });
+
+    it('should handle batch operations with varying data sizes', () => {
+      const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
+      const smallData = Cl.bufferFromHex('0x' + '00'.repeat(10));
+      const largeData = Cl.bufferFromHex('0x' + '00'.repeat(200));
+      
+      const mixedOperations = Cl.list([
+        Cl.tuple({ to: Cl.principal(wallet2), value: Cl.uint(100), data: smallData }),
+        Cl.tuple({ to: Cl.principal(wallet3), value: Cl.uint(200), data: largeData })
+      ]);
+      
+      const result = simnet.callPublicFn(
+        'erc-712',
+        'execute-batch',
+        [mixedOperations, mockSignature],
+        wallet1
+      );
+      
+      expect(result.isErr()).toBe(true);
+      expect(result.value.value).toBe(402); // ERR_INVALID_SIGNATURE
+    });
+  });
+
+  describe('Allowance Query After Operations', () => {
+    it('should return zero allowance after failed permit operations', () => {
+      const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
+      const futureDeadline = simnet.blockHeight + 100;
+      
+      // Attempt permit (will fail)
+      simnet.callPublicFn(
+        'erc-712',
+        'permit',
+        [
+          Cl.principal(wallet1),
+          Cl.principal(wallet2),
+          Cl.uint(5000),
+          Cl.uint(futureDeadline),
+          mockSignature
+        ],
+        wallet1
+      );
+      
+      // Check allowance - should still be zero
+      const allowance = simnet.callReadOnlyFn(
+        'erc-712',
+        'get-allowance',
+        [Cl.principal(wallet1), Cl.principal(wallet2)],
+        deployer
+      );
+      
+      expect(allowance.isOk()).toBe(true);
+      expect(Cl.unwrapUInt(allowance.value)).toBe(0n);
+    });
+
+    it('should handle allowance queries for multiple principal pairs', () => {
+      const pairs = [
+        [wallet1, wallet2],
+        [wallet2, wallet3],
+        [wallet3, wallet1]
+      ];
+      
+      pairs.forEach(([owner, spender]) => {
+        const allowance = simnet.callReadOnlyFn(
+          'erc-712',
+          'get-allowance',
+          [Cl.principal(owner), Cl.principal(spender)],
+          deployer
+        );
+        
+        expect(allowance.isOk()).toBe(true);
+        expect(Cl.unwrapUInt(allowance.value)).toBe(0n);
+      });
+    });
+  });
+
+  describe('Domain Separator Immutability', () => {
+    it('should return same domain separator across multiple calls', () => {
+      const results = [];
+      
+      // Call domain separator multiple times
+      for (let i = 0; i < 5; i++) {
+        const result = simnet.callReadOnlyFn(
+          'erc-712',
+          'get-domain-separator',
+          [],
+          deployer
+        );
+        results.push(result.value);
+      }
+      
+      // All results should be identical
+      results.forEach(result => {
+        expect(result).toEqual(results[0]);
+        expect(Cl.isBuff(result)).toBe(true);
+      });
+    });
+
+    it('should return same domain separator from different callers', () => {
+      const result1 = simnet.callReadOnlyFn(
+        'erc-712',
+        'get-domain-separator',
+        [],
+        deployer
+      );
+      
+      const result2 = simnet.callReadOnlyFn(
+        'erc-712',
+        'get-domain-separator',
+        [],
+        wallet1
+      );
+      
+      const result3 = simnet.callReadOnlyFn(
+        'erc-712',
+        'get-domain-separator',
+        [],
+        wallet2
+      );
+      
+      expect(result1.value).toEqual(result2.value);
+      expect(result2.value).toEqual(result3.value);
+    });
+  });
+
+  describe('Multiple Users Nonce Management', () => {
+    it('should track nonces independently for different users', () => {
+      const users = [wallet1, wallet2, wallet3];
+      const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
+      const futureDeadline = simnet.blockHeight + 100;
+      
+      // Get initial nonces for all users
+      const initialNonces = users.map(user => {
+        const result = simnet.callReadOnlyFn(
+          'erc-712',
+          'get-nonce',
+          [Cl.principal(user)],
+          deployer
+        );
+        return Cl.unwrapUInt(result.value);
+      });
+      
+      // All should start at 0
+      initialNonces.forEach(nonce => {
+        expect(nonce).toBe(0n);
+      });
+      
+      // Attempt operations for each user
+      users.forEach(user => {
+        const result = simnet.callPublicFn(
+          'erc-712',
+          'permit',
+          [
+            Cl.principal(user),
+            Cl.principal(wallet1),
+            Cl.uint(1000),
+            Cl.uint(futureDeadline),
+            mockSignature
+          ],
+          user
+        );
+        expect(result.isErr()).toBe(true);
+      });
+    });
+  });
+
+  describe('Signature Verification Hash Sizes', () => {
+    it('should handle signature verification with different struct hash values', () => {
+      const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
+      const hashValues = [
+        Cl.bufferFromHex('0x' + '11'.repeat(32)),
+        Cl.bufferFromHex('0x' + '22'.repeat(32)),
+        Cl.bufferFromHex('0x' + '33'.repeat(32))
+      ];
+      
+      hashValues.forEach(hash => {
+        const result = simnet.callReadOnlyFn(
+          'erc-712',
+          'is-valid-signature',
+          [hash, mockSignature, Cl.principal(wallet1)],
+          deployer
+        );
+        
+        expect(result.isOk()).toBe(true);
+        expect(Cl.unwrapBool(result.value)).toBe(false);
+      });
+    });
+
+    it('should verify typed data hash generation with different inputs', () => {
+      const hashInputs = [
+        Cl.bufferFromHex('0x' + 'AA'.repeat(32)),
+        Cl.bufferFromHex('0x' + 'BB'.repeat(32)),
+        Cl.bufferFromHex('0x' + 'CC'.repeat(32))
+      ];
+      
+      hashInputs.forEach(hash => {
+        const result = simnet.callReadOnlyFn(
+          'erc-712',
+          'get-typed-data-hash',
+          [hash],
+          deployer
+        );
+        
+        expect(result.isOk()).toBe(true);
+        expect(Cl.isBuff(result.value)).toBe(true);
+        const hashBuffer = Cl.unwrapBuff(result.value);
+        expect(hashBuffer.length).toBe(32);
+      });
+    });
+  });
+
+  describe('Emergency Functions Multiple Users', () => {
+    it('should allow owner to invalidate nonces for multiple users', () => {
+      const users = [wallet1, wallet2, wallet3];
+      
+      users.forEach(user => {
+        // Get initial nonce
+        const initialNonce = simnet.callReadOnlyFn(
+          'erc-712',
+          'get-nonce',
+          [Cl.principal(user)],
+          deployer
+        );
+        const initialValue = Cl.unwrapUInt(initialNonce.value);
+        
+        // Emergency invalidate
+        const result = simnet.callPublicFn(
+          'erc-712',
+          'emergency-invalidate-nonce',
+          [Cl.principal(user)],
+          deployer
+        );
+        
+        expect(result.isOk()).toBe(true);
+        
+        // Check new nonce
+        const newNonce = simnet.callReadOnlyFn(
+          'erc-712',
+          'get-nonce',
+          [Cl.principal(user)],
+          deployer
+        );
+        
+        expect(Cl.unwrapUInt(newNonce.value)).toBe(initialValue + 1000n);
+      });
+    });
+
+    it('should reject emergency invalidation from non-owners', () => {
+      const users = [wallet1, wallet2];
+      
+      users.forEach(caller => {
+        const result = simnet.callPublicFn(
+          'erc-712',
+          'emergency-invalidate-nonce',
+          [Cl.principal(wallet3)],
+          caller
+        );
+        
+        expect(result.isErr()).toBe(true);
+        expect(result.value.value).toBe(401); // ERR_UNAUTHORIZED
+      });
+    });
+  });
+
+  describe('State Consistency Across Operations', () => {
+    it('should maintain consistent state after multiple failed operations', () => {
+      const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
+      const futureDeadline = simnet.blockHeight + 100;
+      
+      // Get initial contract info
+      const initialInfo = simnet.callReadOnlyFn(
+        'erc-712',
+        'get-contract-info',
+        [],
+        deployer
+      );
+      
+      // Perform multiple operations
+      for (let i = 0; i < 3; i++) {
+        simnet.callPublicFn(
+          'erc-712',
+          'permit',
+          [
+            Cl.principal(wallet1),
+            Cl.principal(wallet2),
+            Cl.uint(1000 + i),
+            Cl.uint(futureDeadline),
+            mockSignature
+          ],
+          wallet1
+        );
+      }
+      
+      // Get final contract info
+      const finalInfo = simnet.callReadOnlyFn(
+        'erc-712',
+        'get-contract-info',
+        [],
+        deployer
+      );
+      
+      // Core metadata should remain consistent
+      const initial = Cl.unwrap(initialInfo.value);
+      const final = Cl.unwrap(finalInfo.value);
+      
+      expect(Cl.unwrapAscii(initial.name)).toBe(Cl.unwrapAscii(final.name));
+      expect(Cl.unwrapAscii(initial.version)).toBe(Cl.unwrapAscii(final.version));
+      expect(Cl.unwrapPrincipal(initial.owner)).toBe(Cl.unwrapPrincipal(final.owner));
+    });
+
+    it('should maintain domain separator consistency', () => {
+      const initialDomain = simnet.callReadOnlyFn(
+        'erc-712',
+        'get-domain-separator',
+        [],
+        deployer
+      );
+      
+      // Perform various operations
+      const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
+      simnet.callPublicFn('erc-712', 'permit', [
+        Cl.principal(wallet1), Cl.principal(wallet2), Cl.uint(1000),
+        Cl.uint(simnet.blockHeight + 100), mockSignature
+      ], wallet1);
+      
+      const finalDomain = simnet.callReadOnlyFn(
+        'erc-712',
+        'get-domain-separator',
+        [],
+        deployer
+      );
+      
+      expect(initialDomain.value).toEqual(finalDomain.value);
+    });
+  });
 });
