@@ -1603,4 +1603,80 @@ describe('ERC-712 Contract Tests', () => {
       });
     });
   });
+
+  describe('Batch Operations Edge Cases', () => {
+    it('should handle batch operations with zero values', () => {
+      const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
+      const mockData = Cl.bufferFromHex('0x' + '00'.repeat(50));
+      
+      const zeroValueOperations = Cl.list([
+        Cl.tuple({
+          to: Cl.principal(wallet2),
+          value: Cl.uint(0),
+          data: mockData
+        })
+      ]);
+      
+      const result = simnet.callPublicFn(
+        'erc-712',
+        'execute-batch',
+        [zeroValueOperations, mockSignature],
+        wallet1
+      );
+      
+      expect(result.isErr()).toBe(true);
+      expect(result.value.value).toBe(402); // ERR_INVALID_SIGNATURE
+    });
+
+    it('should handle batch operations with same recipient multiple times', () => {
+      const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
+      const mockData = Cl.bufferFromHex('0x' + '00'.repeat(50));
+      
+      const sameRecipientOperations = Cl.list([
+        Cl.tuple({
+          to: Cl.principal(wallet2),
+          value: Cl.uint(100),
+          data: mockData
+        }),
+        Cl.tuple({
+          to: Cl.principal(wallet2),
+          value: Cl.uint(200),
+          data: mockData
+        })
+      ]);
+      
+      const result = simnet.callPublicFn(
+        'erc-712',
+        'execute-batch',
+        [sameRecipientOperations, mockSignature],
+        wallet1
+      );
+      
+      expect(result.isErr()).toBe(true);
+      expect(result.value.value).toBe(402); // ERR_INVALID_SIGNATURE
+    });
+
+    it('should handle batch operations with empty data buffers', () => {
+      const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
+      const emptyData = Cl.bufferFromHex('0x');
+      
+      const emptyDataOperations = Cl.list([
+        Cl.tuple({
+          to: Cl.principal(wallet2),
+          value: Cl.uint(100),
+          data: emptyData
+        })
+      ]);
+      
+      const result = simnet.callPublicFn(
+        'erc-712',
+        'execute-batch',
+        [emptyDataOperations, mockSignature],
+        wallet1
+      );
+      
+      expect(result.isErr()).toBe(true);
+      expect(result.value.value).toBe(402); // ERR_INVALID_SIGNATURE
+    });
+  });
 });
