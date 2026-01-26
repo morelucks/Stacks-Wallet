@@ -1679,4 +1679,79 @@ describe('ERC-712 Contract Tests', () => {
       expect(result.value.value).toBe(402); // ERR_INVALID_SIGNATURE
     });
   });
+
+  describe('Delegation Edge Cases', () => {
+    it('should handle delegation with same delegator and delegatee', () => {
+      const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
+      const futureTime = simnet.blockHeight + 100;
+      
+      const result = simnet.callPublicFn(
+        'erc-712',
+        'delegate-by-sig',
+        [
+          Cl.principal(wallet1),
+          Cl.principal(wallet1), // Same as delegator
+          Cl.uint(futureTime),
+          mockSignature
+        ],
+        deployer
+      );
+      
+      expect(result.isErr()).toBe(true);
+      expect(result.value.value).toBe(402); // ERR_INVALID_SIGNATURE
+    });
+
+    it('should handle delegation queries for non-existent delegations', () => {
+      const users = [wallet1, wallet2, wallet3];
+      
+      users.forEach(user => {
+        const result = simnet.callReadOnlyFn(
+          'erc-712',
+          'get-delegate',
+          [Cl.principal(user)],
+          deployer
+        );
+        
+        expect(result.isOk()).toBe(true);
+        expect(Cl.isNone(result.value)).toBe(true);
+      });
+    });
+
+    it('should handle delegation with boundary expiry times', () => {
+      const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
+      const currentBlock = simnet.blockHeight;
+      
+      // Test with current block (should be expired)
+      const result1 = simnet.callPublicFn(
+        'erc-712',
+        'delegate-by-sig',
+        [
+          Cl.principal(wallet1),
+          Cl.principal(wallet2),
+          Cl.uint(currentBlock),
+          mockSignature
+        ],
+        deployer
+      );
+      
+      expect(result1.isErr()).toBe(true);
+      expect(result1.value.value).toBe(403); // ERR_EXPIRED
+      
+      // Test with future block
+      const result2 = simnet.callPublicFn(
+        'erc-712',
+        'delegate-by-sig',
+        [
+          Cl.principal(wallet1),
+          Cl.principal(wallet2),
+          Cl.uint(currentBlock + 1),
+          mockSignature
+        ],
+        deployer
+      );
+      
+      expect(result2.isErr()).toBe(true);
+      expect(result2.value.value).toBe(402); // ERR_INVALID_SIGNATURE
+    });
+  });
 });
