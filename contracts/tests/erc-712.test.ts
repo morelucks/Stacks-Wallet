@@ -941,4 +941,56 @@ describe('ERC-712 Contract Tests', () => {
       expect(result.value.value).toBe(402); // ERR_INVALID_SIGNATURE
     });
   });
+
+  describe('Allowance Query After Operations', () => {
+    it('should return zero allowance after failed permit operations', () => {
+      const mockSignature = Cl.bufferFromHex('0x' + '00'.repeat(65));
+      const futureDeadline = simnet.blockHeight + 100;
+      
+      // Attempt permit (will fail)
+      simnet.callPublicFn(
+        'erc-712',
+        'permit',
+        [
+          Cl.principal(wallet1),
+          Cl.principal(wallet2),
+          Cl.uint(5000),
+          Cl.uint(futureDeadline),
+          mockSignature
+        ],
+        wallet1
+      );
+      
+      // Check allowance - should still be zero
+      const allowance = simnet.callReadOnlyFn(
+        'erc-712',
+        'get-allowance',
+        [Cl.principal(wallet1), Cl.principal(wallet2)],
+        deployer
+      );
+      
+      expect(allowance.isOk()).toBe(true);
+      expect(Cl.unwrapUInt(allowance.value)).toBe(0n);
+    });
+
+    it('should handle allowance queries for multiple principal pairs', () => {
+      const pairs = [
+        [wallet1, wallet2],
+        [wallet2, wallet3],
+        [wallet3, wallet1]
+      ];
+      
+      pairs.forEach(([owner, spender]) => {
+        const allowance = simnet.callReadOnlyFn(
+          'erc-712',
+          'get-allowance',
+          [Cl.principal(owner), Cl.principal(spender)],
+          deployer
+        );
+        
+        expect(allowance.isOk()).toBe(true);
+        expect(Cl.unwrapUInt(allowance.value)).toBe(0n);
+      });
+    });
+  });
 });
