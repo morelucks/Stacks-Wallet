@@ -875,3 +875,243 @@
       })
       
       (ok true))))
+;; Governance and voting features
+(define-map proposals uint {
+  title: (string-ascii 128),
+  description: (string-ascii 512),
+  proposer: principal,
+  created-at: uint,
+  voting-ends-at: uint,
+  votes-for: uint,
+  votes-against: uint,
+  executed: bool,
+  min-tokens-required: uint
+})
+
+(define-map votes {proposal-id: uint, voter: principal} {
+  vote: bool, ;; true = for, false = against
+  tokens-voted: (list 50 uint),
+  voted-at: uint
+})
+
+(define-data-var next-proposal-id uint u1)
+(define-data-var governance-enabled bool true)
+(define-data-var min-proposal-tokens uint u10) ;; Minimum tokens to create proposal
+
+;; Create governance proposal
+(define-public (create-proposal 
+  (title (string-ascii 128))
+  (description (string-ascii 512))
+  (voting-duration uint)
+  (min-tokens-required uint))
+  (let ((proposal-id (var-get next-proposal-id))
+        (user-tokens (get-user-token-count tx-sender)))
+    (begin
+      (asserts! (var-get governance-enabled) ERR-CONTRACT-PAUSED)
+      (asserts! (>= user-tokens (var-get min-proposal-tokens)) ERR-UNAUTHORIZED)
+      (asserts! (> voting-duration u0) ERR-INVALID-PRICE)
+      
+      (map-set proposals proposal-id {
+        title: title,
+        description: description,
+        proposer: tx-sender,
+        created-at: block-height,
+        voting-ends-at: (+ block-height voting-duration),
+        votes-for: u0,
+        votes-against: u0,
+        executed: false,
+        min-tokens-required: min-tokens-required
+      })
+      
+      (var-set next-proposal-id (+ proposal-id u1))
+      
+      (print {
+        notification: "proposal-created",
+        payload: {
+          proposal-id: proposal-id,
+          title: title,
+          proposer: tx-sender,
+          voting-ends-at: (+ block-height voting-duration)
+        }
+      })
+      
+      (ok proposal-id))))
+
+;; Vote on proposal
+(define-public (vote-on-proposal 
+  (proposal-id uint)
+  (vote bool) ;; true = for, false = against
+  (token-ids (list 50 uint)))
+  (let ((proposal (unwrap! (map-get? proposals proposal-id) ERR-TOKEN-NOT-FOUND))
+        (voting-power (len token-ids)))
+    (begin
+      (asserts! (var-get governance-enabled) ERR-CONTRACT-PAUSED)
+      (asserts! (< block-height (get voting-ends-at proposal)) ERR-UNAUTHORIZED)
+      (asserts! (is-none (map-get? votes {proposal-id: proposal-id, voter: tx-sender})) ERR-TOKEN-EXISTS)
+      (asserts! (> voting-power u0) ERR-INVALID-PRICE)
+      
+      ;; Validate token ownership
+      (asserts! (validate-token-ownership token-ids) ERR-NOT-TOKEN-OWNER)
+      
+      ;; Record vote
+      (map-set votes {proposal-id: proposal-id, voter: tx-sender} {
+        vote: vote,
+        tokens-voted: token-ids,
+        voted-at: block-height
+      })
+      
+      ;; Update proposal vote counts
+      (if vote
+        (map-set proposals proposal-id 
+          (merge proposal {votes-for: (+ (get votes-for proposal) voting-power)}))
+        (map-set proposals proposal-id 
+          (merge proposal {votes-against: (+ (get votes-against proposal) voting-power)})))
+      
+      (print {
+        notification: "vote-cast",
+        payload: {
+          proposal-id: proposal-id,
+          voter: tx-sender,
+          vote: vote,
+          voting-power: voting-power
+        }
+      })
+      
+      (ok true))))
+
+;; Validate token ownership for voting
+(define-private (validate-token-ownership (token-ids (list 50 uint)))
+  (fold validate-single-token-ownership token-ids true))
+
+(define-private (validate-single-token-ownership (token-id uint) (acc bool))
+  (and acc 
+    (match (nft-get-owner? enhanced-nft token-id)
+      owner (is-eq owner tx-sender)
+      false)))
+
+;; Execute proposal (if passed)
+(define-public (execute-proposal (proposal-id uint))
+  (let ((proposal (unwrap! (map-get? proposals proposal-id) ERR-TOKEN-NOT-FOUND)))
+    (begin
+      (asserts! (>= block-height (get voting-ends-at proposal)) ERR-UNAUTHORIZED)
+      (asserts! (not (get executed proposal)) ERR-TOKEN-EXISTS)
+      (asserts! (> (get votes-for proposal) (get votes-against proposal)) ERR-UNAUTHORIZED)
+      (asserts! (>= (get votes-for proposal) (get min-tokens-required proposal)) ERR-UNAUTHORIZED)
+      
+      ;; Mark as executed
+      (map-set proposals proposal-id (merge proposal {executed: true}))
+      
+      (print {
+        notification: "proposal-executed",
+        payload: {
+          proposal-id: proposal-id,
+          votes-for: (get votes-for proposal),
+          votes-against: (get votes-against proposal)
+        }
+      })
+      
+      (ok true))))
+
+;; Get user token count
+(define-private (get-user-token-count (user principal))
+  ;; Simplified - would iterate through all tokens to count ownership
+  u1) ;; Placeholder
+
+;; Get proposal info
+(define-read-only (get-proposal-info (proposal-id uint))
+  (map-get? proposals proposal-id))
+
+;; Get vote info
+(define-read-only (get-vote-info (proposal-id uint) (voter principal))
+  (map-get? votes {proposal-id: proposal-id, voter: voter}))
+
+;; Check if proposal is active
+(define-read-only (is-proposal-active (proposal-id uint))
+  (match (map-get? proposals proposal-id)
+    proposal (and 
+      (< block-height (get voting-ends-at proposal))
+      (not (get executed proposal)))
+    false))
+
+;; Administrative functions
+(define-public (set-contract-paused (paused bool))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-OWNER-ONLY)
+    (var-set contract-paused paused)
+    
+    (print {
+      notification: "contract-pause-changed",
+      payload: {
+        paused: paused,
+        admin: tx-sender
+      }
+    })
+    
+    (ok true)))
+
+(define-public (set-base-uri (new-base-uri (string-ascii 256)))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-OWNER-ONLY)
+    (var-set base-uri new-base-uri)
+    
+    (print {
+      notification: "base-uri-updated",
+      payload: {
+        new-base-uri: new-base-uri,
+        admin: tx-sender
+      }
+    })
+    
+    (ok true)))
+
+(define-public (set-token-uri (token-id uint) (uri (string-ascii 256)))
+  (let ((metadata (unwrap! (map-get? token-metadata token-id) ERR-TOKEN-NOT-FOUND)))
+    (begin
+      (asserts! (or 
+        (is-eq tx-sender CONTRACT-OWNER)
+        (is-eq tx-sender (get creator metadata))) ERR-UNAUTHORIZED)
+      
+      (map-set token-uris token-id uri)
+      
+      (print {
+        notification: "token-uri-updated",
+        payload: {
+          token-id: token-id,
+          uri: uri,
+          updated-by: tx-sender
+        }
+      })
+      
+      (ok true))))
+
+;; Emergency functions
+(define-public (emergency-transfer (token-id uint) (from principal) (to principal))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-OWNER-ONLY)
+    (asserts! (var-get contract-paused) ERR-UNAUTHORIZED) ;; Only during pause
+    
+    (try! (nft-transfer? enhanced-nft token-id from to))
+    
+    (print {
+      notification: "emergency-transfer",
+      payload: {
+        token-id: token-id,
+        from: from,
+        to: to,
+        admin: tx-sender
+      }
+    })
+    
+    (ok true)))
+
+;; Contract statistics
+(define-read-only (get-contract-stats)
+  {
+    total-supply: (var-get total-supply),
+    last-token-id: (var-get last-token-id),
+    total-collections: (- (var-get next-collection-id) u1),
+    total-proposals: (- (var-get next-proposal-id) u1),
+    staking-pools: (- (var-get next-pool-id) u1),
+    contract-paused: (var-get contract-paused),
+    governance-enabled: (var-get governance-enabled)
+  })
