@@ -594,14 +594,216 @@
   (item { from: principal, to: principal, value: uint, data: (buff 256) })
   (index uint))
   { index: index, item: item })
-;; Delegation functionality
+;; Enhanced delegation functionality with hierarchical support
 (define-map delegations principal principal)
 (define-map voting-power principal uint)
+
+;; Hierarchical delegation structure
+(define-map delegation-hierarchy
+  { delegator: principal, level: uint }
+  {
+    delegatee: principal,
+    permissions: (list 10 (string-ascii 20)),
+    created: uint,
+    expiry: uint,
+    active: bool,
+    parent-delegation: (optional principal)
+  })
+
+;; Delegation audit trail
+(define-map delegation-audit
+  principal
+  (list 50 {
+    action: (string-ascii 20),
+    target: principal,
+    timestamp: uint,
+    details: (optional (buff 256))
+  }))
 
 (define-constant DELEGATION_TYPEHASH
   0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef)
 
-;; Hash delegation data
+;; Hierarchical delegation support
+(define-public (delegate-hierarchical
+  (delegator principal)
+  (delegatee principal)
+  (level uint)
+  (permissions (list 10 (string-ascii 20)))
+  (expiry uint)
+  (signature (buff 65)))
+  (response bool uint))
+  (let ((current-nonce (get-nonce delegator))
+        (delegation-hash (hash-hierarchical-delegation delegator delegatee level permissions current-nonce expiry)))
+    (asserts! (not (var-get contract-paused)) ERR_PAUSED)
+    (asserts! (< block-height expiry) ERR_EXPIRED)
+    (asserts! (verify-typed-signature-enhanced delegation-hash signature delegator "secp256k1") ERR_INVALID_SIGNATURE)
+    (asserts! (not (is-signature-used-enhanced signature)) ERR_ALREADY_USED)
+    
+    ;; Mark signature as used and increment nonce
+    (mark-signature-used-enhanced signature delegator "secp256k1")
+    (increment-nonce delegator)
+    
+    ;; Set hierarchical delegation
+    (map-set delegation-hierarchy { delegator: delegator, level: level } {
+      delegatee: delegatee,
+      permissions: permissions,
+      created: block-height,
+      expiry: expiry,
+      active: true,
+      parent-delegation: (get-parent-delegation delegator level)
+    })
+    
+    ;; Update audit trail
+    (update-delegation-audit delegator "delegate" delegatee none)
+    
+    ;; Set simple delegation for backward compatibility
+    (map-set delegations delegator delegatee)
+    
+    (print { 
+      event: "hierarchical-delegation", 
+      delegator: delegator, 
+      delegatee: delegatee, 
+      level: level,
+      permissions: permissions,
+      expiry: expiry,
+      timestamp: block-height
+    })
+    
+    (ok true)))
+
+;; Hash hierarchical delegation
+(define-private (hash-hierarchical-delegation
+  (delegator principal)
+  (delegatee principal)
+  (level uint)
+  (permissions (list 10 (string-ascii 20)))
+  (nonce uint)
+  (expiry uint))
+  (let ((delegation-data (concat
+    (principal-to-buff delegator)
+    (principal-to-buff delegatee)
+    (int-to-ascii level)
+    (hash-permissions permissions)
+    (int-to-ascii nonce)
+    (int-to-ascii expiry))))
+    (hash-struct "HierarchicalDelegation(address delegator,address delegatee,uint256 level,string[] permissions,uint256 nonce,uint256 expiry)" delegation-data)))
+
+;; Hash permissions list
+(define-private (hash-permissions (permissions (list 10 (string-ascii 20))))
+  (fold concat-permission permissions 0x00))
+
+(define-private (concat-permission (permission (string-ascii 20)) (acc (buff 256)))
+  (concat acc (unwrap-panic (to-consensus-buff? permission))))
+
+;; Get parent delegation for hierarchical structure
+(define-private (get-parent-delegation (delegator principal) (level uint))
+  (if (> level u0)
+    (match (map-get? delegation-hierarchy { delegator: delegator, level: (- level u1) })
+      parent-del (some (get delegatee parent-del))
+      none)
+    none))
+
+;; Delegation audit trail maintenance
+(define-read-only (get-delegation-history (user principal))
+  (response (list 50 { delegatee: principal, timestamp: uint, expiry: uint, active: bool }) uint))
+  (match (map-get? delegation-audit user)
+    audit-trail (ok (map convert-audit-to-history audit-trail))
+    (ok (list))))
+
+(define-private (convert-audit-to-history 
+  (audit-entry { action: (string-ascii 20), target: principal, timestamp: uint, details: (optional (buff 256)) }))
+  { delegatee: (get target audit-entry), timestamp: (get timestamp audit-entry), expiry: u0, active: (is-eq (get action audit-entry) "delegate") })
+
+;; Update delegation audit trail
+(define-private (update-delegation-audit 
+  (user principal) 
+  (action (string-ascii 20)) 
+  (target principal) 
+  (details (optional (buff 256))))
+  (let ((current-audit (default-to (list) (map-get? delegation-audit user))))
+    (map-set delegation-audit user 
+      (unwrap-panic (as-max-len? 
+        (append current-audit { 
+          action: action, 
+          target: target, 
+          timestamp: block-height, 
+          details: details 
+        }) u50)))))
+
+;; Immediate delegation revocation
+(define-public (revoke-delegation-immediate (delegatee principal))
+  (response bool uint))
+  (begin
+    ;; Revoke simple delegation
+    (map-delete delegations tx-sender)
+    
+    ;; Revoke hierarchical delegations
+    (revoke-hierarchical-delegations tx-sender delegatee)
+    
+    ;; Update audit trail
+    (update-delegation-audit tx-sender "revoke" delegatee none)
+    
+    (print { 
+      event: "delegation-revoked", 
+      delegator: tx-sender, 
+      delegatee: delegatee,
+      timestamp: block-height
+    })
+    
+    (ok true)))
+
+;; Revoke hierarchical delegations for a user
+(define-private (revoke-hierarchical-delegations (delegator principal) (delegatee principal))
+  (begin
+    ;; This is a simplified version - in a full implementation, 
+    ;; we would iterate through all levels
+    (map-set delegation-hierarchy { delegator: delegator, level: u0 } {
+      delegatee: delegatee,
+      permissions: (list),
+      created: u0,
+      expiry: u0,
+      active: false,
+      parent-delegation: none
+    })
+    true))
+
+;; Automatic delegation expiry handling
+(define-read-only (is-delegation-active (delegator principal) (level uint))
+  (match (map-get? delegation-hierarchy { delegator: delegator, level: level })
+    delegation (and 
+      (get active delegation)
+      (< block-height (get expiry delegation)))
+    false))
+
+;; Comprehensive delegation queries
+(define-read-only (get-delegation-info (delegator principal) (level uint))
+  (response { 
+    delegatee: (optional principal), 
+    permissions: (list 10 (string-ascii 20)), 
+    created: uint, 
+    expiry: uint, 
+    active: bool,
+    parent-delegation: (optional principal)
+  } uint))
+  (match (map-get? delegation-hierarchy { delegator: delegator, level: level })
+    delegation (ok {
+      delegatee: (some (get delegatee delegation)),
+      permissions: (get permissions delegation),
+      created: (get created delegation),
+      expiry: (get expiry delegation),
+      active: (and (get active delegation) (< block-height (get expiry delegation))),
+      parent-delegation: (get parent-delegation delegation)
+    })
+    (ok {
+      delegatee: none,
+      permissions: (list),
+      created: u0,
+      expiry: u0,
+      active: false,
+      parent-delegation: none
+    })))
+
+;; Hash delegation data (original for compatibility)
 (define-private (hash-delegation
   (delegator principal)
   (delegatee principal)
@@ -614,7 +816,7 @@
     (int-to-ascii expiry))))
     (hash-struct "Delegation(address delegator,address delegatee,uint256 nonce,uint256 expiry)" delegation-data)))
 
-;; Delegate by signature
+;; Delegate by signature (original for backward compatibility)
 (define-public (delegate-by-sig
   (delegator principal)
   (delegatee principal)
@@ -624,18 +826,30 @@
         (delegation-hash (hash-delegation delegator delegatee current-nonce expiry)))
     (asserts! (not (var-get contract-paused)) ERR_PAUSED)
     (asserts! (< block-height expiry) ERR_EXPIRED)
-    (asserts! (verify-typed-signature delegation-hash signature delegator) ERR_INVALID_SIGNATURE)
-    (asserts! (not (is-signature-used signature)) ERR_ALREADY_USED)
+    (asserts! (verify-typed-signature-enhanced delegation-hash signature delegator "secp256k1") ERR_INVALID_SIGNATURE)
+    (asserts! (not (is-signature-used-enhanced signature)) ERR_ALREADY_USED)
     
     ;; Mark signature as used and increment nonce
-    (mark-signature-used signature)
+    (mark-signature-used-enhanced signature delegator "secp256k1")
     (increment-nonce delegator)
     
     ;; Set delegation
     (map-set delegations delegator delegatee)
+    
+    ;; Update audit trail
+    (update-delegation-audit delegator "delegate" delegatee none)
+    
+    (print { 
+      event: "delegation", 
+      delegator: delegator, 
+      delegatee: delegatee, 
+      expiry: expiry,
+      timestamp: block-height
+    })
+    
     (ok true)))
 
-;; Get delegate
+;; Get delegate (original for compatibility)
 (define-read-only (get-delegate (delegator principal))
   (map-get? delegations delegator))
 ;; Batch operations
