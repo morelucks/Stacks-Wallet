@@ -175,6 +175,7 @@
   (signature (buff 65)))
   (let ((current-nonce (get-nonce from))
         (meta-tx-hash (hash-meta-tx from to value data current-nonce)))
+    (asserts! (not (var-get contract-paused)) ERR_PAUSED)
     (asserts! (verify-typed-signature meta-tx-hash signature from) ERR_INVALID_SIGNATURE)
     (asserts! (not (is-signature-used signature)) ERR_ALREADY_USED)
     
