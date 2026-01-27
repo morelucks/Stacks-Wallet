@@ -684,3 +684,194 @@
       })
       
       (ok true))))
+;; Staking and utility features
+(define-map staked-tokens uint {
+  owner: principal,
+  staked-at: uint,
+  rewards-earned: uint,
+  pool-id: uint
+})
+
+(define-map staking-pools uint {
+  name: (string-ascii 64),
+  reward-rate: uint, ;; rewards per block
+  total-staked: uint,
+  active: bool,
+  created-by: principal,
+  min-stake-duration: uint
+})
+
+(define-data-var next-pool-id uint u1)
+(define-data-var staking-enabled bool true)
+
+;; Create staking pool
+(define-public (create-staking-pool 
+  (name (string-ascii 64))
+  (reward-rate uint)
+  (min-stake-duration uint))
+  (let ((pool-id (var-get next-pool-id)))
+    (begin
+      (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-OWNER-ONLY)
+      (asserts! (> reward-rate u0) ERR-INVALID-PRICE)
+      
+      (map-set staking-pools pool-id {
+        name: name,
+        reward-rate: reward-rate,
+        total-staked: u0,
+        active: true,
+        created-by: tx-sender,
+        min-stake-duration: min-stake-duration
+      })
+      
+      (var-set next-pool-id (+ pool-id u1))
+      
+      (print {
+        notification: "staking-pool-created",
+        payload: {
+          pool-id: pool-id,
+          name: name,
+          reward-rate: reward-rate
+        }
+      })
+      
+      (ok pool-id))))
+
+;; Stake NFT
+(define-public (stake-nft (token-id uint) (pool-id uint))
+  (let ((owner (unwrap! (nft-get-owner? enhanced-nft token-id) ERR-TOKEN-NOT-FOUND))
+        (pool (unwrap! (map-get? staking-pools pool-id) ERR-TOKEN-NOT-FOUND)))
+    (begin
+      (asserts! (is-eq tx-sender owner) ERR-NOT-TOKEN-OWNER)
+      (asserts! (var-get staking-enabled) ERR-CONTRACT-PAUSED)
+      (asserts! (get active pool) ERR-UNAUTHORIZED)
+      (asserts! (is-none (map-get? staked-tokens token-id)) ERR-TOKEN-EXISTS)
+      
+      (map-set staked-tokens token-id {
+        owner: tx-sender,
+        staked-at: block-height,
+        rewards-earned: u0,
+        pool-id: pool-id
+      })
+      
+      ;; Update pool total
+      (map-set staking-pools pool-id 
+        (merge pool {total-staked: (+ (get total-staked pool) u1)}))
+      
+      (print {
+        notification: "nft-staked",
+        payload: {
+          token-id: token-id,
+          owner: tx-sender,
+          pool-id: pool-id,
+          staked-at: block-height
+        }
+      })
+      
+      (ok true))))
+
+;; Unstake NFT
+(define-public (unstake-nft (token-id uint))
+  (let ((stake-info (unwrap! (map-get? staked-tokens token-id) ERR-TOKEN-NOT-FOUND))
+        (pool (unwrap! (map-get? staking-pools (get pool-id stake-info)) ERR-TOKEN-NOT-FOUND)))
+    (begin
+      (asserts! (is-eq tx-sender (get owner stake-info)) ERR-NOT-TOKEN-OWNER)
+      (asserts! (>= (- block-height (get staked-at stake-info)) (get min-stake-duration pool)) ERR-UNAUTHORIZED)
+      
+      ;; Calculate rewards
+      (let ((rewards (calculate-staking-rewards token-id)))
+        (begin
+          ;; Remove from staking
+          (map-delete staked-tokens token-id)
+          
+          ;; Update pool total
+          (map-set staking-pools (get pool-id stake-info)
+            (merge pool {total-staked: (- (get total-staked pool) u1)}))
+          
+          (print {
+            notification: "nft-unstaked",
+            payload: {
+              token-id: token-id,
+              owner: tx-sender,
+              rewards-earned: rewards,
+              staked-duration: (- block-height (get staked-at stake-info))
+            }
+          })
+          
+          (ok rewards))))))
+
+;; Calculate staking rewards
+(define-private (calculate-staking-rewards (token-id uint))
+  (match (map-get? staked-tokens token-id)
+    stake-info (match (map-get? staking-pools (get pool-id stake-info))
+      pool (let ((staked-duration (- block-height (get staked-at stake-info))))
+        (* staked-duration (get reward-rate pool)))
+      u0)
+    u0))
+
+;; Claim staking rewards without unstaking
+(define-public (claim-staking-rewards (token-id uint))
+  (let ((stake-info (unwrap! (map-get? staked-tokens token-id) ERR-TOKEN-NOT-FOUND)))
+    (begin
+      (asserts! (is-eq tx-sender (get owner stake-info)) ERR-NOT-TOKEN-OWNER)
+      
+      (let ((rewards (calculate-staking-rewards token-id)))
+        (begin
+          ;; Update rewards earned
+          (map-set staked-tokens token-id 
+            (merge stake-info {
+              rewards-earned: (+ (get rewards-earned stake-info) rewards),
+              staked-at: block-height ;; Reset staking time for next reward calculation
+            }))
+          
+          (print {
+            notification: "rewards-claimed",
+            payload: {
+              token-id: token-id,
+              owner: tx-sender,
+              rewards: rewards
+            }
+          })
+          
+          (ok rewards))))))
+
+;; Get staking info
+(define-read-only (get-staking-info (token-id uint))
+  (map-get? staked-tokens token-id))
+
+;; Get pool info
+(define-read-only (get-pool-info (pool-id uint))
+  (map-get? staking-pools pool-id))
+
+;; Check if token is staked
+(define-read-only (is-token-staked (token-id uint))
+  (is-some (map-get? staked-tokens token-id)))
+
+;; Get pending rewards
+(define-read-only (get-pending-rewards (token-id uint))
+  (calculate-staking-rewards token-id))
+
+;; Utility functions for token holders
+(define-public (burn-token (token-id uint))
+  (let ((owner (unwrap! (nft-get-owner? enhanced-nft token-id) ERR-TOKEN-NOT-FOUND)))
+    (begin
+      (asserts! (is-eq tx-sender owner) ERR-NOT-TOKEN-OWNER)
+      (asserts! (is-none (map-get? staked-tokens token-id)) ERR-UNAUTHORIZED) ;; Can't burn staked tokens
+      
+      (try! (nft-burn? enhanced-nft token-id owner))
+      
+      ;; Clean up metadata
+      (map-delete token-metadata token-id)
+      (map-delete token-royalties token-id)
+      (map-delete token-uris token-id)
+      
+      (var-set total-supply (- (var-get total-supply) u1))
+      
+      (print {
+        notification: "nft-burned",
+        payload: {
+          token-id: token-id,
+          owner: owner
+        }
+      })
+      
+      (ok true))))
