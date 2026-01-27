@@ -131,6 +131,7 @@
   (signature (buff 65)))
   (let ((current-nonce (get-nonce owner))
         (permit-hash (hash-permit owner spender value current-nonce deadline)))
+    (asserts! (not (var-get contract-paused)) ERR_PAUSED)
     (asserts! (< block-height deadline) ERR_EXPIRED)
     (asserts! (verify-typed-signature permit-hash signature owner) ERR_INVALID_SIGNATURE)
     (asserts! (not (is-signature-used signature)) ERR_ALREADY_USED)
