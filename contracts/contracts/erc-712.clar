@@ -888,27 +888,210 @@
     
     ;; Execute operations (simplified)
     (ok (len operations))))
-;; Administrative functions
+;; Enhanced administrative functions with role-based access control
 (define-data-var contract-paused bool false)
 
-;; Pause/unpause contract
+;; User roles and permissions
+(define-map user-roles
+  principal
+  (list 10 (string-ascii 20)))
+
+;; Role permissions mapping
+(define-map role-permissions
+  (string-ascii 20)
+  (list 20 (string-ascii 30)))
+
+;; Function pause status
+(define-map function-pause-status
+  (string-ascii 30)
+  { paused: bool, paused-by: principal, timestamp: uint })
+
+;; Initialize default roles and permissions
+(map-set role-permissions "admin" (list "pause_contract" "grant_roles" "emergency_functions" "blacklist_signatures"))
+(map-set role-permissions "moderator" (list "pause_functions" "invalidate_signatures"))
+(map-set role-permissions "operator" (list "view_analytics" "export_data"))
+
+;; Grant initial admin role to contract owner
+(map-set user-roles CONTRACT_OWNER (list "admin"))
+
+;; Role-based access control
+(define-public (grant-role (user principal) (role (string-ascii 20)))
+  (response bool uint))
+  (begin
+    (asserts! (has-permission tx-sender "grant_roles") ERR_UNAUTHORIZED)
+    (let ((current-roles (default-to (list) (map-get? user-roles user))))
+      (map-set user-roles user 
+        (unwrap-panic (as-max-len? (append current-roles role) u10)))
+      (print { 
+        event: "role-granted", 
+        user: user, 
+        role: role, 
+        granted-by: tx-sender,
+        timestamp: block-height
+      })
+      (ok true))))
+
+(define-public (revoke-role (user principal) (role (string-ascii 20)))
+  (response bool uint))
+  (begin
+    (asserts! (has-permission tx-sender "grant_roles") ERR_UNAUTHORIZED)
+    (let ((current-roles (default-to (list) (map-get? user-roles user))))
+      (map-set user-roles user (filter-role current-roles role))
+      (print { 
+        event: "role-revoked", 
+        user: user, 
+        role: role, 
+        revoked-by: tx-sender,
+        timestamp: block-height
+      })
+      (ok true))))
+
+;; Check if user has specific permission
+(define-read-only (has-permission (user principal) (permission (string-ascii 30)))
+  (let ((user-roles-list (default-to (list) (map-get? user-roles user))))
+    (fold check-role-permission user-roles-list false)))
+
+(define-private (check-role-permission (role (string-ascii 20)) (acc bool))
+  (or acc 
+    (let ((role-perms (default-to (list) (map-get? role-permissions role))))
+      (is-some (index-of role-perms permission)))))
+
+;; Filter out a specific role from user's roles
+(define-private (filter-role 
+  (roles (list 10 (string-ascii 20))) 
+  (role-to-remove (string-ascii 20)))
+  (filter (lambda (r) (not (is-eq r role-to-remove))) roles))
+
+;; Granular pause controls
+(define-public (pause-function (function-name (string-ascii 30)))
+  (response bool uint))
+  (begin
+    (asserts! (has-permission tx-sender "pause_functions") ERR_UNAUTHORIZED)
+    (map-set function-pause-status function-name {
+      paused: true,
+      paused-by: tx-sender,
+      timestamp: block-height
+    })
+    (print { 
+      event: "function-paused", 
+      function: function-name, 
+      paused-by: tx-sender,
+      timestamp: block-height
+    })
+    (ok true)))
+
+(define-public (unpause-function (function-name (string-ascii 30)))
+  (response bool uint))
+  (begin
+    (asserts! (has-permission tx-sender "pause_functions") ERR_UNAUTHORIZED)
+    (map-set function-pause-status function-name {
+      paused: false,
+      paused-by: tx-sender,
+      timestamp: block-height
+    })
+    (print { 
+      event: "function-unpaused", 
+      function: function-name, 
+      unpaused-by: tx-sender,
+      timestamp: block-height
+    })
+    (ok true)))
+
+;; Check if specific function is paused
+(define-read-only (is-function-paused (function-name (string-ascii 30)))
+  (match (map-get? function-pause-status function-name)
+    status (get paused status)
+    false))
+
+;; Contract health monitoring
+(define-read-only (get-contract-health)
+  (response { 
+    contract-paused: bool, 
+    total-signatures: uint, 
+    blacklisted-signatures: uint,
+    active-delegations: uint,
+    last-activity: uint
+  } uint))
+  (ok {
+    contract-paused: (var-get contract-paused),
+    total-signatures: (get-total-signatures),
+    blacklisted-signatures: (get-blacklisted-count),
+    active-delegations: (get-active-delegations-count),
+    last-activity: block-height
+  }))
+
+;; Helper functions for health monitoring
+(define-private (get-total-signatures)
+  ;; Simplified - in real implementation would count actual signatures
+  u1000)
+
+(define-private (get-blacklisted-count)
+  ;; Simplified - in real implementation would count blacklisted signatures
+  u5)
+
+(define-private (get-active-delegations-count)
+  ;; Simplified - in real implementation would count active delegations
+  u50)
+
+;; Emergency recovery functions
+(define-public (emergency-invalidate-multiple-users (users (list 100 principal)))
+  (response (list 100 uint) uint))
+  (begin
+    (asserts! (has-permission tx-sender "emergency_functions") ERR_UNAUTHORIZED)
+    (let ((results (map emergency-invalidate-single-user users)))
+      (print { 
+        event: "emergency-bulk-invalidation", 
+        users: users, 
+        executed-by: tx-sender,
+        timestamp: block-height
+      })
+      (ok results))))
+
+(define-private (emergency-invalidate-single-user (user principal))
+  (let ((current-nonce (get-nonce user)))
+    (map-set nonces user (+ current-nonce u1000))
+    (+ current-nonce u1000)))
+
+;; Pause/unpause contract (enhanced)
 (define-public (set-paused (paused bool))
   (begin
-    (asserts! (is-eq tx-sender CONTRACT_OWNER) ERR_UNAUTHORIZED)
+    (asserts! (has-permission tx-sender "pause_contract") ERR_UNAUTHORIZED)
     (var-set contract-paused paused)
+    (print { 
+      event: "contract-pause-changed", 
+      paused: paused, 
+      changed-by: tx-sender,
+      timestamp: block-height
+    })
     (ok paused)))
 
 ;; Check if contract is paused
 (define-read-only (is-paused)
   (var-get contract-paused))
 
-;; Emergency function to invalidate all signatures for a user
+;; Emergency function to invalidate all signatures for a user (enhanced)
 (define-public (emergency-invalidate-nonce (user principal))
   (begin
-    (asserts! (is-eq tx-sender CONTRACT_OWNER) ERR_UNAUTHORIZED)
+    (asserts! (has-permission tx-sender "emergency_functions") ERR_UNAUTHORIZED)
     (let ((current-nonce (get-nonce user)))
       (map-set nonces user (+ current-nonce u1000))
+      (print { 
+        event: "emergency-nonce-invalidation", 
+        user: user, 
+        old-nonce: current-nonce,
+        new-nonce: (+ current-nonce u1000),
+        executed-by: tx-sender,
+        timestamp: block-height
+      })
       (ok (+ current-nonce u1000)))))
+
+;; Get user roles
+(define-read-only (get-user-roles (user principal))
+  (default-to (list) (map-get? user-roles user)))
+
+;; Get role permissions
+(define-read-only (get-role-permissions (role (string-ascii 20)))
+  (default-to (list) (map-get? role-permissions role)))
 
 ;; Utility functions for external integrations
 (define-read-only (get-chain-id)
