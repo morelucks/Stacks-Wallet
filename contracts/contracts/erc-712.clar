@@ -1215,3 +1215,277 @@
   (item { from: principal, to: principal, value: uint, data: (buff 256) })
   (index uint))
   { index: index, item: item })
+;; Performance optimization layer with caching
+;; Cached computation results
+(define-map computation-cache
+  (buff 32)
+  { result: (buff 32), timestamp: uint, expiry: uint })
+
+;; Batch operation metadata
+(define-map batch-metadata
+  (buff 32)
+  { size: uint, gas-used: uint, timestamp: uint, success-rate: uint })
+
+;; Cache frequently computed values
+(define-private (cache-computation 
+  (input (buff 32)) 
+  (result (buff 32)) 
+  (expiry-duration uint))
+  (map-set computation-cache input {
+    result: result,
+    timestamp: block-height,
+    expiry: (+ block-height expiry-duration)
+  }))
+
+;; Get cached computation result
+(define-read-only (get-cached-result (input (buff 32)))
+  (match (map-get? computation-cache input)
+    cached (if (< block-height (get expiry cached))
+      (some (get result cached))
+      none)
+    none))
+
+;; Optimized batch nonce retrieval
+(define-read-only (get-nonces-batch (users (list 50 principal)))
+  (response (list 50 { user: principal, nonce: uint }) uint))
+  (ok (map get-user-nonce users)))
+
+(define-private (get-user-nonce (user principal))
+  { user: user, nonce: (get-nonce user) })
+
+;; Optimized batch allowance queries
+(define-read-only (get-allowances-batch 
+  (queries (list 50 { owner: principal, spender: principal })))
+  (response (list 50 { owner: principal, spender: principal, allowance: uint }) uint))
+  (ok (map get-single-allowance queries)))
+
+(define-private (get-single-allowance (query { owner: principal, spender: principal }))
+  { 
+    owner: (get owner query), 
+    spender: (get spender query), 
+    allowance: (get-allowance (get owner query) (get spender query)) 
+  })
+
+;; Gas-efficient signature verification with caching
+(define-private (verify-signature-cached
+  (message-hash (buff 32))
+  (signature (buff 65))
+  (signer principal))
+  (let ((cache-key (sha256 (concat message-hash signature))))
+    (match (get-cached-result cache-key)
+      cached-result (is-eq cached-result 0x01)
+      (let ((verification-result (verify-signature-secp256k1 message-hash signature signer)))
+        (cache-computation cache-key 
+          (if verification-result 0x01 0x00) 
+          u100) ;; Cache for 100 blocks
+        verification-result))))
+
+;; Batch state updates for gas efficiency
+(define-public (batch-update-allowances
+  (updates (list 20 { owner: principal, spender: principal, value: uint })))
+  (response bool uint))
+  (begin
+    (asserts! (has-permission tx-sender "batch_operations") ERR_UNAUTHORIZED)
+    (map update-single-allowance updates)
+    (print { 
+      event: "batch-allowance-update", 
+      count: (len updates),
+      updated-by: tx-sender,
+      timestamp: block-height
+    })
+    (ok true)))
+
+(define-private (update-single-allowance 
+  (update { owner: principal, spender: principal, value: uint }))
+  (map-set allowances 
+    { owner: (get owner update), spender: (get spender update) } 
+    (get value update)))
+
+;; Efficient data structures for frequent operations
+(define-map frequent-signers principal uint)
+
+;; Track frequent signers for optimization
+(define-private (track-signer-activity (signer principal))
+  (let ((current-count (default-to u0 (map-get? frequent-signers signer))))
+    (map-set frequent-signers signer (+ current-count u1))))
+
+;; Get signer activity count
+(define-read-only (get-signer-activity (signer principal))
+  (default-to u0 (map-get? frequent-signers signer)))
+
+;; Optimized signature validation for frequent signers
+(define-private (verify-signature-optimized
+  (message-hash (buff 32))
+  (signature (buff 65))
+  (signer principal))
+  (begin
+    (track-signer-activity signer)
+    (if (> (get-signer-activity signer) u10)
+      (verify-signature-cached message-hash signature signer)
+      (verify-signature-secp256k1 message-hash signature signer))))
+;; Enhanced permit functionality
+;; Conditional permits with execution conditions
+(define-map conditional-permits
+  { owner: principal, spender: principal, permit-id: (buff 32) }
+  {
+    value: uint,
+    conditions: (list 5 { type: (string-ascii 20), value: (buff 256) }),
+    expiry: uint,
+    used: bool,
+    transferable: bool
+  })
+
+;; Permit revocation tracking
+(define-map revoked-permits (buff 32) { revoked-by: principal, timestamp: uint })
+
+;; Create conditional permit
+(define-public (create-conditional-permit
+  (owner principal)
+  (spender principal)
+  (value uint)
+  (conditions (list 5 { type: (string-ascii 20), value: (buff 256) }))
+  (expiry uint)
+  (transferable bool)
+  (signature (buff 65)))
+  (response (buff 32) uint))
+  (let ((current-nonce (get-nonce owner))
+        (permit-id (sha256 (concat (principal-to-buff owner) (principal-to-buff spender) (int-to-ascii current-nonce))))
+        (permit-hash (hash-conditional-permit owner spender value conditions expiry transferable current-nonce)))
+    (asserts! (not (var-get contract-paused)) ERR_PAUSED)
+    (asserts! (< block-height expiry) ERR_EXPIRED)
+    (asserts! (verify-typed-signature-enhanced permit-hash signature owner "secp256k1") ERR_INVALID_SIGNATURE)
+    (asserts! (not (is-signature-used-enhanced signature)) ERR_ALREADY_USED)
+    
+    ;; Mark signature as used and increment nonce
+    (mark-signature-used-enhanced signature owner "secp256k1")
+    (increment-nonce owner)
+    
+    ;; Store conditional permit
+    (map-set conditional-permits { owner: owner, spender: spender, permit-id: permit-id } {
+      value: value,
+      conditions: conditions,
+      expiry: expiry,
+      used: false,
+      transferable: transferable
+    })
+    
+    (print { 
+      event: "conditional-permit-created", 
+      owner: owner, 
+      spender: spender, 
+      permit-id: permit-id,
+      value: value,
+      conditions: conditions,
+      expiry: expiry,
+      transferable: transferable,
+      timestamp: block-height
+    })
+    
+    (ok permit-id)))
+
+;; Hash conditional permit
+(define-private (hash-conditional-permit
+  (owner principal)
+  (spender principal)
+  (value uint)
+  (conditions (list 5 { type: (string-ascii 20), value: (buff 256) }))
+  (expiry uint)
+  (transferable bool)
+  (nonce uint))
+  (let ((permit-data (concat
+    (principal-to-buff owner)
+    (principal-to-buff spender)
+    (int-to-ascii value)
+    (hash-conditions conditions)
+    (int-to-ascii expiry)
+    (if transferable 0x01 0x00)
+    (int-to-ascii nonce))))
+    (hash-struct "ConditionalPermit(address owner,address spender,uint256 value,Condition[] conditions,uint256 expiry,bool transferable,uint256 nonce)" permit-data)))
+
+;; Use conditional permit
+(define-public (use-conditional-permit
+  (owner principal)
+  (spender principal)
+  (permit-id (buff 32)))
+  (response bool uint))
+  (match (map-get? conditional-permits { owner: owner, spender: spender, permit-id: permit-id })
+    permit-data (begin
+      (asserts! (not (get used permit-data)) ERR_ALREADY_USED)
+      (asserts! (< block-height (get expiry permit-data)) ERR_EXPIRED)
+      (asserts! (not (is-permit-revoked permit-id)) ERR_INVALID_SIGNATURE)
+      (asserts! (validate-conditions (get conditions permit-data)) ERR_INVALID_SIGNATURE)
+      
+      ;; Mark permit as used
+      (map-set conditional-permits { owner: owner, spender: spender, permit-id: permit-id }
+        (merge permit-data { used: true }))
+      
+      ;; Set allowance
+      (map-set allowances { owner: owner, spender: spender } (get value permit-data))
+      
+      (print { 
+        event: "conditional-permit-used", 
+        owner: owner, 
+        spender: spender, 
+        permit-id: permit-id,
+        value: (get value permit-data),
+        timestamp: block-height
+      })
+      
+      (ok true))
+    ERR_INVALID_SIGNATURE))
+
+;; Revoke permit before expiry
+(define-public (revoke-permit (permit-id (buff 32)))
+  (response bool uint))
+  (begin
+    (map-set revoked-permits permit-id { revoked-by: tx-sender, timestamp: block-height })
+    (print { 
+      event: "permit-revoked", 
+      permit-id: permit-id,
+      revoked-by: tx-sender,
+      timestamp: block-height
+    })
+    (ok true)))
+
+;; Check if permit is revoked
+(define-read-only (is-permit-revoked (permit-id (buff 32)))
+  (is-some (map-get? revoked-permits permit-id)))
+
+;; Transfer permit (if transferable)
+(define-public (transfer-permit
+  (owner principal)
+  (old-spender principal)
+  (new-spender principal)
+  (permit-id (buff 32)))
+  (response bool uint))
+  (match (map-get? conditional-permits { owner: owner, spender: old-spender, permit-id: permit-id })
+    permit-data (begin
+      (asserts! (is-eq tx-sender owner) ERR_UNAUTHORIZED)
+      (asserts! (get transferable permit-data) ERR_UNAUTHORIZED)
+      (asserts! (not (get used permit-data)) ERR_ALREADY_USED)
+      (asserts! (< block-height (get expiry permit-data)) ERR_EXPIRED)
+      
+      ;; Remove old permit
+      (map-delete conditional-permits { owner: owner, spender: old-spender, permit-id: permit-id })
+      
+      ;; Create new permit for new spender
+      (map-set conditional-permits { owner: owner, spender: new-spender, permit-id: permit-id } permit-data)
+      
+      (print { 
+        event: "permit-transferred", 
+        owner: owner, 
+        old-spender: old-spender,
+        new-spender: new-spender,
+        permit-id: permit-id,
+        timestamp: block-height
+      })
+      
+      (ok true))
+    ERR_INVALID_SIGNATURE))
+
+;; Get permit info
+(define-read-only (get-permit-info 
+  (owner principal) 
+  (spender principal) 
+  (permit-id (buff 32)))
+  (map-get? conditional-permits { owner: owner, spender: spender, permit-id: permit-id }))
