@@ -7,6 +7,7 @@
 (define-constant ERR_INVALID_SIGNATURE (err u402))
 (define-constant ERR_EXPIRED (err u403))
 (define-constant ERR_ALREADY_USED (err u404))
+(define-constant ERR_PAUSED (err u405))
 
 ;; Domain separator constants
 (define-constant DOMAIN_NAME "ERC712Contract")
