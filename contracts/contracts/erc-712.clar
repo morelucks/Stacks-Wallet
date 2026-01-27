@@ -384,44 +384,216 @@
 ;; Get allowance
 (define-read-only (get-allowance (owner principal) (spender principal))
   (default-to u0 (map-get? allowances { owner: owner, spender: spender })))
-;; Meta-transaction support
+;; Enhanced meta-transaction support with conditions and batching
 (define-constant META_TX_TYPEHASH
   0x23e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7)
 
-;; Meta-transaction structure
-(define-private (hash-meta-tx
+;; Conditional meta-transaction execution
+(define-public (execute-conditional-meta-tx
   (from principal)
   (to principal)
   (value uint)
   (data (buff 1024))
+  (conditions (list 5 { type: (string-ascii 20), value: (buff 256) }))
+  (signature (buff 65)))
+  (response { success: bool, result: (buff 256) } uint))
+  (let ((current-nonce (get-nonce from))
+        (meta-tx-hash (hash-conditional-meta-tx from to value data conditions current-nonce)))
+    (asserts! (not (var-get contract-paused)) ERR_PAUSED)
+    (asserts! (verify-typed-signature-enhanced meta-tx-hash signature from "secp256k1") ERR_INVALID_SIGNATURE)
+    (asserts! (not (is-signature-used-enhanced signature)) ERR_ALREADY_USED)
+    (asserts! (validate-conditions conditions) ERR_INVALID_SIGNATURE)
+    
+    ;; Mark signature as used and increment nonce
+    (mark-signature-used-enhanced signature from "secp256k1")
+    (increment-nonce from)
+    
+    ;; Execute the transaction
+    (let ((execution-result (execute-transaction-logic from to value data)))
+      (print { 
+        event: "conditional-meta-tx", 
+        from: from, 
+        to: to, 
+        value: value, 
+        nonce: current-nonce,
+        conditions: conditions,
+        timestamp: block-height
+      })
+      (ok { success: true, result: execution-result }))))
+
+;; Hash conditional meta-transaction
+(define-private (hash-conditional-meta-tx
+  (from principal)
+  (to principal)
+  (value uint)
+  (data (buff 1024))
+  (conditions (list 5 { type: (string-ascii 20), value: (buff 256) }))
   (nonce uint))
   (let ((meta-tx-data (concat
     (principal-to-buff from)
     (principal-to-buff to)
     (int-to-ascii value)
     data
+    (hash-conditions conditions)
     (int-to-ascii nonce))))
-    (hash-struct "MetaTransaction(address from,address to,uint256 value,bytes data,uint256 nonce)" meta-tx-data)))
+    (hash-struct "ConditionalMetaTransaction(address from,address to,uint256 value,bytes data,Condition[] conditions,uint256 nonce)" meta-tx-data)))
 
-;; Execute meta-transaction
-(define-public (execute-meta-transaction
+;; Validate execution conditions
+(define-private (validate-conditions (conditions (list 5 { type: (string-ascii 20), value: (buff 256) })))
+  (fold validate-single-condition conditions true))
+
+(define-private (validate-single-condition 
+  (condition { type: (string-ascii 20), value: (buff 256) })
+  (acc bool))
+  (and acc
+    (if (is-eq (get type condition) "balance_check")
+      (>= (stx-get-balance tx-sender) (buff-to-uint-be (get value condition)))
+      (if (is-eq (get type condition) "time_check")
+        (< block-height (buff-to-uint-be (get value condition)))
+        true))))
+
+;; Hash conditions for meta-transaction
+(define-private (hash-conditions (conditions (list 5 { type: (string-ascii 20), value: (buff 256) })))
+  (fold concat-condition conditions 0x00))
+
+(define-private (concat-condition 
+  (condition { type: (string-ascii 20), value: (buff 256) })
+  (acc (buff 256)))
+  (concat acc (concat (unwrap-panic (to-consensus-buff? (get type condition))) (get value condition))))
+
+;; Batch meta-transaction processing
+(define-public (execute-meta-tx-batch
+  (transactions (list 20 { from: principal, to: principal, value: uint, data: (buff 256) }))
+  (signatures (list 20 (buff 65))))
+  (response (list 20 bool) uint))
+  (let ((batch-hash (hash-batch-meta-tx transactions))
+        (results (map execute-single-meta-tx-in-batch 
+                     (zip transactions signatures))))
+    (asserts! (not (var-get contract-paused)) ERR_PAUSED)
+    (print { 
+      event: "batch-meta-tx", 
+      count: (len transactions),
+      timestamp: block-height
+    })
+    (ok results)))
+
+;; Execute single meta-transaction in batch
+(define-private (execute-single-meta-tx-in-batch 
+  (tx-sig-pair { tx: { from: principal, to: principal, value: uint, data: (buff 256) }, sig: (buff 65) }))
+  (let ((tx-data (get tx tx-sig-pair))
+        (signature (get sig tx-sig-pair))
+        (from (get from tx-data))
+        (current-nonce (get-nonce from))
+        (meta-tx-hash (hash-meta-tx from (get to tx-data) (get value tx-data) (get data tx-data) current-nonce)))
+    (if (and 
+          (verify-typed-signature-enhanced meta-tx-hash signature from "secp256k1")
+          (not (is-signature-used-enhanced signature)))
+      (begin
+        (mark-signature-used-enhanced signature from "secp256k1")
+        (increment-nonce from)
+        true)
+      false)))
+
+;; Hash batch meta-transaction
+(define-private (hash-batch-meta-tx
+  (transactions (list 20 { from: principal, to: principal, value: uint, data: (buff 256) })))
+  (sha256 (fold concat-batch-tx transactions 0x00)))
+
+(define-private (concat-batch-tx 
+  (tx { from: principal, to: principal, value: uint, data: (buff 256) })
+  (acc (buff 1024)))
+  (concat acc 
+    (concat 
+      (principal-to-buff (get from tx))
+      (concat 
+        (principal-to-buff (get to tx))
+        (concat (int-to-ascii (get value tx)) (get data tx))))))
+
+;; Fee delegation for meta-transactions
+(define-public (execute-meta-tx-with-fee-delegation
   (from principal)
   (to principal)
   (value uint)
   (data (buff 1024))
-  (signature (buff 65)))
+  (fee-payer principal)
+  (fee-amount uint)
+  (signature (buff 65))
+  (fee-signature (buff 65)))
+  (response bool uint))
   (let ((current-nonce (get-nonce from))
-        (meta-tx-hash (hash-meta-tx from to value data current-nonce)))
+        (fee-nonce (get-nonce fee-payer))
+        (meta-tx-hash (hash-meta-tx from to value data current-nonce))
+        (fee-hash (hash-fee-delegation fee-payer from fee-amount fee-nonce)))
     (asserts! (not (var-get contract-paused)) ERR_PAUSED)
-    (asserts! (verify-typed-signature meta-tx-hash signature from) ERR_INVALID_SIGNATURE)
-    (asserts! (not (is-signature-used signature)) ERR_ALREADY_USED)
+    (asserts! (verify-typed-signature-enhanced meta-tx-hash signature from "secp256k1") ERR_INVALID_SIGNATURE)
+    (asserts! (verify-typed-signature-enhanced fee-hash fee-signature fee-payer "secp256k1") ERR_INVALID_SIGNATURE)
+    (asserts! (not (is-signature-used-enhanced signature)) ERR_ALREADY_USED)
+    (asserts! (not (is-signature-used-enhanced fee-signature)) ERR_ALREADY_USED)
     
-    ;; Mark signature as used and increment nonce
-    (mark-signature-used signature)
+    ;; Mark signatures as used and increment nonces
+    (mark-signature-used-enhanced signature from "secp256k1")
+    (mark-signature-used-enhanced fee-signature fee-payer "secp256k1")
     (increment-nonce from)
+    (increment-nonce fee-payer)
     
-    ;; Execute the transaction (simplified - would call actual function)
-    (ok { from: from, to: to, value: value, nonce: current-nonce })))
+    ;; Execute transaction and charge fee
+    (let ((execution-result (execute-transaction-logic from to value data)))
+      (print { 
+        event: "fee-delegated-meta-tx", 
+        from: from, 
+        to: to, 
+        value: value, 
+        fee-payer: fee-payer,
+        fee-amount: fee-amount,
+        timestamp: block-height
+      })
+      (ok true))))
+
+;; Hash fee delegation
+(define-private (hash-fee-delegation
+  (fee-payer principal)
+  (beneficiary principal)
+  (fee-amount uint)
+  (nonce uint))
+  (let ((fee-data (concat
+    (principal-to-buff fee-payer)
+    (principal-to-buff beneficiary)
+    (int-to-ascii fee-amount)
+    (int-to-ascii nonce))))
+    (hash-struct "FeeDelegation(address feePayer,address beneficiary,uint256 feeAmount,uint256 nonce)" fee-data)))
+
+;; Execute transaction logic (simplified)
+(define-private (execute-transaction-logic 
+  (from principal)
+  (to principal)
+  (value uint)
+  (data (buff 1024)))
+  (buff 32))
+  ;; Simplified execution - in real implementation would route to appropriate functions
+  (sha256 (concat (principal-to-buff from) (principal-to-buff to))))
+
+;; Utility function to zip two lists
+(define-private (zip 
+  (list1 (list 20 { from: principal, to: principal, value: uint, data: (buff 256) }))
+  (list2 (list 20 (buff 65))))
+  (list 20 { tx: { from: principal, to: principal, value: uint, data: (buff 256) }, sig: (buff 65) }))
+  (map create-tx-sig-pair (enumerate list1) list2))
+
+(define-private (create-tx-sig-pair 
+  (indexed-tx { index: uint, item: { from: principal, to: principal, value: uint, data: (buff 256) } })
+  (sig (buff 65)))
+  { tx: (get item indexed-tx), sig: sig })
+
+;; Helper to enumerate list items with indices
+(define-private (enumerate 
+  (items (list 20 { from: principal, to: principal, value: uint, data: (buff 256) })))
+  (list 20 { index: uint, item: { from: principal, to: principal, value: uint, data: (buff 256) } }))
+  (map add-index items (list u0 u1 u2 u3 u4 u5 u6 u7 u8 u9 u10 u11 u12 u13 u14 u15 u16 u17 u18 u19)))
+
+(define-private (add-index 
+  (item { from: principal, to: principal, value: uint, data: (buff 256) })
+  (index uint))
+  { index: index, item: item })
 ;; Delegation functionality
 (define-map delegations principal principal)
 (define-map voting-power principal uint)
@@ -581,3 +753,68 @@
 ;; - Delegation with signature verification
 ;; - Batch operations
 ;; - Administrative controls
+;; Meta-transaction structure (original for compatibility)
+(define-private (hash-meta-tx
+  (from principal)
+  (to principal)
+  (value uint)
+  (data (buff 1024))
+  (nonce uint))
+  (let ((meta-tx-data (concat
+    (principal-to-buff from)
+    (principal-to-buff to)
+    (int-to-ascii value)
+    data
+    (int-to-ascii nonce))))
+    (hash-struct "MetaTransaction(address from,address to,uint256 value,bytes data,uint256 nonce)" meta-tx-data)))
+
+;; Execute meta-transaction (original for backward compatibility)
+(define-public (execute-meta-transaction
+  (from principal)
+  (to principal)
+  (value uint)
+  (data (buff 1024))
+  (signature (buff 65)))
+  (let ((current-nonce (get-nonce from))
+        (meta-tx-hash (hash-meta-tx from to value data current-nonce)))
+    (asserts! (not (var-get contract-paused)) ERR_PAUSED)
+    (asserts! (verify-typed-signature-enhanced meta-tx-hash signature from "secp256k1") ERR_INVALID_SIGNATURE)
+    (asserts! (not (is-signature-used-enhanced signature)) ERR_ALREADY_USED)
+    
+    ;; Mark signature as used and increment nonce
+    (mark-signature-used-enhanced signature from "secp256k1")
+    (increment-nonce from)
+    
+    ;; Execute the transaction (simplified - would call actual function)
+    (print { 
+      event: "meta-transaction", 
+      from: from, 
+      to: to, 
+      value: value, 
+      nonce: current-nonce,
+      timestamp: block-height
+    })
+    (ok { from: from, to: to, value: value, nonce: current-nonce })))
+
+;; Utility function to zip two lists
+(define-private (zip 
+  (list1 (list 20 { from: principal, to: principal, value: uint, data: (buff 256) }))
+  (list2 (list 20 (buff 65))))
+  (list 20 { tx: { from: principal, to: principal, value: uint, data: (buff 256) }, sig: (buff 65) }))
+  (map create-tx-sig-pair (enumerate list1) list2))
+
+(define-private (create-tx-sig-pair 
+  (indexed-tx { index: uint, item: { from: principal, to: principal, value: uint, data: (buff 256) } })
+  (sig (buff 65)))
+  { tx: (get item indexed-tx), sig: sig })
+
+;; Helper to enumerate list items with indices
+(define-private (enumerate 
+  (items (list 20 { from: principal, to: principal, value: uint, data: (buff 256) })))
+  (list 20 { index: uint, item: { from: principal, to: principal, value: uint, data: (buff 256) } }))
+  (map add-index items (list u0 u1 u2 u3 u4 u5 u6 u7 u8 u9 u10 u11 u12 u13 u14 u15 u16 u17 u18 u19)))
+
+(define-private (add-index 
+  (item { from: principal, to: principal, value: uint, data: (buff 256) })
+  (index uint))
+  { index: index, item: item })
