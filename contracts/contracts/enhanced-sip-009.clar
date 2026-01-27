@@ -478,3 +478,209 @@
 ;; Get token royalty info
 (define-read-only (get-token-royalty (token-id uint))
   (map-get? token-royalties token-id))
+;; Advanced metadata and collection features
+(define-map collections uint {
+  name: (string-ascii 64),
+  description: (string-ascii 256),
+  creator: principal,
+  max-supply: uint,
+  current-supply: uint,
+  royalty-percentage: uint,
+  base-uri: (string-ascii 256),
+  created-at: uint,
+  is-revealed: bool
+})
+
+(define-map token-collections uint uint) ;; token-id -> collection-id
+(define-data-var next-collection-id uint u1)
+
+;; Create new collection
+(define-public (create-collection 
+  (name (string-ascii 64))
+  (description (string-ascii 256))
+  (max-supply uint)
+  (royalty-percentage uint)
+  (base-uri (string-ascii 256)))
+  (let ((collection-id (var-get next-collection-id)))
+    (begin
+      (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-OWNER-ONLY)
+      (asserts! (> max-supply u0) ERR-INVALID-METADATA)
+      (asserts! (<= royalty-percentage u1000) ERR-ROYALTY-EXCEEDED)
+      
+      (map-set collections collection-id {
+        name: name,
+        description: description,
+        creator: tx-sender,
+        max-supply: max-supply,
+        current-supply: u0,
+        royalty-percentage: royalty-percentage,
+        base-uri: base-uri,
+        created-at: block-height,
+        is-revealed: false
+      })
+      
+      (var-set next-collection-id (+ collection-id u1))
+      
+      (print {
+        notification: "collection-created",
+        payload: {
+          collection-id: collection-id,
+          name: name,
+          max-supply: max-supply,
+          creator: tx-sender
+        }
+      })
+      
+      (ok collection-id))))
+
+;; Mint to collection
+(define-public (mint-to-collection 
+  (collection-id uint)
+  (recipient principal)
+  (name (string-ascii 64))
+  (description (string-ascii 256))
+  (image (string-ascii 256))
+  (attributes (list 10 {trait_type: (string-ascii 32), value: (string-ascii 64)})))
+  (let ((collection (unwrap! (map-get? collections collection-id) ERR-TOKEN-NOT-FOUND))
+        (token-id (+ (var-get last-token-id) u1)))
+    (begin
+      (asserts! (is-eq tx-sender (get creator collection)) ERR-UNAUTHORIZED)
+      (asserts! (< (get current-supply collection) (get max-supply collection)) ERR-BATCH-SIZE-EXCEEDED)
+      
+      (try! (nft-mint? enhanced-nft token-id recipient))
+      
+      (map-set token-metadata token-id {
+        name: name,
+        description: description,
+        image: image,
+        attributes: attributes,
+        creator: tx-sender,
+        created-at: block-height,
+        rarity: "common"
+      })
+      
+      (map-set token-collections token-id collection-id)
+      
+      ;; Update collection supply
+      (map-set collections collection-id 
+        (merge collection {current-supply: (+ (get current-supply collection) u1)}))
+      
+      (var-set last-token-id token-id)
+      (var-set total-supply (+ (var-get total-supply) u1))
+      
+      (print {
+        notification: "nft-minted-to-collection",
+        payload: {
+          token-id: token-id,
+          collection-id: collection-id,
+          recipient: recipient,
+          name: name
+        }
+      })
+      
+      (ok token-id))))
+
+;; Reveal collection metadata
+(define-public (reveal-collection (collection-id uint) (new-base-uri (string-ascii 256)))
+  (let ((collection (unwrap! (map-get? collections collection-id) ERR-TOKEN-NOT-FOUND)))
+    (begin
+      (asserts! (is-eq tx-sender (get creator collection)) ERR-UNAUTHORIZED)
+      (asserts! (not (get is-revealed collection)) ERR-UNAUTHORIZED)
+      
+      (map-set collections collection-id 
+        (merge collection {
+          base-uri: new-base-uri,
+          is-revealed: true
+        }))
+      
+      (print {
+        notification: "collection-revealed",
+        payload: {
+          collection-id: collection-id,
+          new-base-uri: new-base-uri
+        }
+      })
+      
+      (ok true))))
+
+;; Get collection info
+(define-read-only (get-collection-info (collection-id uint))
+  (map-get? collections collection-id))
+
+;; Get token collection
+(define-read-only (get-token-collection (token-id uint))
+  (map-get? token-collections token-id))
+
+;; Advanced metadata functions
+(define-public (update-token-metadata 
+  (token-id uint)
+  (name (string-ascii 64))
+  (description (string-ascii 256))
+  (image (string-ascii 256)))
+  (let ((metadata (unwrap! (map-get? token-metadata token-id) ERR-TOKEN-NOT-FOUND)))
+    (begin
+      (asserts! (is-eq tx-sender (get creator metadata)) ERR-UNAUTHORIZED)
+      
+      (map-set token-metadata token-id 
+        (merge metadata {
+          name: name,
+          description: description,
+          image: image
+        }))
+      
+      (print {
+        notification: "metadata-updated",
+        payload: {
+          token-id: token-id,
+          name: name,
+          updated-by: tx-sender
+        }
+      })
+      
+      (ok true))))
+
+;; Add attribute to token
+(define-public (add-token-attribute 
+  (token-id uint)
+  (trait-type (string-ascii 32))
+  (value (string-ascii 64)))
+  (let ((metadata (unwrap! (map-get? token-metadata token-id) ERR-TOKEN-NOT-FOUND))
+        (current-attributes (get attributes metadata)))
+    (begin
+      (asserts! (is-eq tx-sender (get creator metadata)) ERR-UNAUTHORIZED)
+      (asserts! (< (len current-attributes) u10) ERR-BATCH-SIZE-EXCEEDED)
+      
+      (map-set token-metadata token-id 
+        (merge metadata {
+          attributes: (unwrap-panic (as-max-len? 
+            (append current-attributes {trait_type: trait-type, value: value}) u10))
+        }))
+      
+      (print {
+        notification: "attribute-added",
+        payload: {
+          token-id: token-id,
+          trait-type: trait-type,
+          value: value
+        }
+      })
+      
+      (ok true))))
+
+;; Set token rarity
+(define-public (set-token-rarity (token-id uint) (rarity (string-ascii 16)))
+  (let ((metadata (unwrap! (map-get? token-metadata token-id) ERR-TOKEN-NOT-FOUND)))
+    (begin
+      (asserts! (is-eq tx-sender (get creator metadata)) ERR-UNAUTHORIZED)
+      
+      (map-set token-metadata token-id (merge metadata {rarity: rarity}))
+      
+      (print {
+        notification: "rarity-updated",
+        payload: {
+          token-id: token-id,
+          rarity: rarity
+        }
+      })
+      
+      (ok true))))
