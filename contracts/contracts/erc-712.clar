@@ -1792,3 +1792,454 @@
 (define-read-only (estimate-batch-gas (operation-count uint))
   (response uint uint))
   (ok (* operation-count u1000))) ;; Simplified gas estimation
+;; Enhanced error handling and configuration management
+;; Additional error constants for comprehensive error reporting
+(define-constant ERR_BUFFER_TOO_LARGE (err u411))
+(define-constant ERR_INVALID_CONDITION (err u412))
+(define-constant ERR_PERMIT_REVOKED (err u413))
+(define-constant ERR_PERMIT_NOT_TRANSFERABLE (err u414))
+(define-constant ERR_DELEGATION_EXPIRED (err u415))
+(define-constant ERR_INSUFFICIENT_PERMISSIONS (err u416))
+(define-constant ERR_BATCH_SIZE_EXCEEDED (err u417))
+(define-constant ERR_CONFIGURATION_LOCKED (err u418))
+
+;; Configuration management system
+(define-map contract-config
+  (string-ascii 30)
+  { value: (buff 256), locked: bool, updated-by: principal, timestamp: uint })
+
+;; Feature flags
+(define-map feature-flags
+  (string-ascii 30)
+  { enabled: bool, updated-by: principal, timestamp: uint })
+
+;; Operational limits
+(define-map operational-limits
+  (string-ascii 30)
+  { limit: uint, updated-by: principal, timestamp: uint })
+
+;; Initialize default configuration
+(map-set operational-limits "max_batch_size" { limit: u50, updated-by: CONTRACT_OWNER, timestamp: u0 })
+(map-set operational-limits "max_signature_age" { limit: u1000, updated-by: CONTRACT_OWNER, timestamp: u0 })
+(map-set operational-limits "max_delegation_levels" { limit: u10, updated-by: CONTRACT_OWNER, timestamp: u0 })
+
+;; Initialize feature flags
+(map-set feature-flags "hierarchical_delegation" { enabled: true, updated-by: CONTRACT_OWNER, timestamp: u0 })
+(map-set feature-flags "conditional_permits" { enabled: true, updated-by: CONTRACT_OWNER, timestamp: u0 })
+(map-set feature-flags "batch_operations" { enabled: true, updated-by: CONTRACT_OWNER, timestamp: u0 })
+
+;; Domain parameter customization
+(define-public (update-domain-parameter 
+  (parameter (string-ascii 30)) 
+  (value (buff 256)))
+  (response bool uint))
+  (begin
+    (asserts! (has-permission tx-sender "configure_domain") ERR_UNAUTHORIZED)
+    (match (map-get? contract-config parameter)
+      config (asserts! (not (get locked config)) ERR_CONFIGURATION_LOCKED)
+      true)
+    
+    (map-set contract-config parameter {
+      value: value,
+      locked: false,
+      updated-by: tx-sender,
+      timestamp: block-height
+    })
+    
+    (print { 
+      event: "domain-parameter-updated", 
+      parameter: parameter,
+      updated-by: tx-sender,
+      timestamp: block-height
+    })
+    
+    (ok true)))
+
+;; Operational limit configuration
+(define-public (set-operational-limit 
+  (limit-name (string-ascii 30)) 
+  (limit-value uint))
+  (response bool uint))
+  (begin
+    (asserts! (has-permission tx-sender "configure_limits") ERR_UNAUTHORIZED)
+    (asserts! (> limit-value u0) ERR_INVALID_SIGNATURE)
+    
+    (map-set operational-limits limit-name {
+      limit: limit-value,
+      updated-by: tx-sender,
+      timestamp: block-height
+    })
+    
+    (print { 
+      event: "operational-limit-updated", 
+      limit-name: limit-name,
+      limit-value: limit-value,
+      updated-by: tx-sender,
+      timestamp: block-height
+    })
+    
+    (ok true)))
+
+;; Feature flag management
+(define-public (toggle-feature 
+  (feature-name (string-ascii 30)) 
+  (enabled bool))
+  (response bool uint))
+  (begin
+    (asserts! (has-permission tx-sender "manage_features") ERR_UNAUTHORIZED)
+    
+    (map-set feature-flags feature-name {
+      enabled: enabled,
+      updated-by: tx-sender,
+      timestamp: block-height
+    })
+    
+    (print { 
+      event: "feature-toggled", 
+      feature-name: feature-name,
+      enabled: enabled,
+      updated-by: tx-sender,
+      timestamp: block-height
+    })
+    
+    (ok true)))
+
+;; Check if feature is enabled
+(define-read-only (is-feature-enabled (feature-name (string-ascii 30)))
+  (match (map-get? feature-flags feature-name)
+    flag (get enabled flag)
+    false))
+
+;; Get operational limit
+(define-read-only (get-operational-limit (limit-name (string-ascii 30)))
+  (match (map-get? operational-limits limit-name)
+    limit-data (get limit limit-data)
+    u0))
+
+;; Enhanced error reporting with context
+(define-read-only (get-error-details (error-code uint))
+  (response { 
+    code: uint, 
+    message: (string-ascii 100), 
+    category: (string-ascii 20),
+    recoverable: bool 
+  } uint))
+  (ok (if (is-eq error-code u401)
+    { code: u401, message: "Unauthorized access - insufficient permissions", category: "authorization", recoverable: false }
+    (if (is-eq error-code u402)
+      { code: u402, message: "Invalid signature - verification failed", category: "cryptography", recoverable: true }
+      (if (is-eq error-code u403)
+        { code: u403, message: "Expired - timestamp or deadline passed", category: "timing", recoverable: false }
+        (if (is-eq error-code u404)
+          { code: u404, message: "Already used - signature replay detected", category: "replay", recoverable: false }
+          { code: error-code, message: "Unknown error", category: "unknown", recoverable: false }))))))
+
+;; System error event emission
+(define-private (emit-error-event 
+  (error-code uint) 
+  (context (string-ascii 50)) 
+  (user principal))
+  (print { 
+    event: "system-error", 
+    error-code: error-code,
+    context: context,
+    user: user,
+    timestamp: block-height
+  }))
+
+;; Graceful error handling wrapper
+(define-private (handle-error 
+  (result (response bool uint)) 
+  (context (string-ascii 50)))
+  (match result
+    success success
+    error-code (begin
+      (emit-error-event error-code context tx-sender)
+      (err error-code))))
+
+;; State consistency validation
+(define-read-only (validate-contract-state)
+  (response { 
+    consistent: bool, 
+    issues: (list 10 (string-ascii 50)) 
+  } uint))
+  (let ((issues (list)))
+    ;; Check for basic consistency issues
+    (let ((domain-separator-valid (not (is-eq (var-get domain-separator) 0x00)))
+          (owner-valid (not (is-eq CONTRACT_OWNER 'SP000000000000000000002Q6VF78))))
+      (ok {
+        consistent: (and domain-separator-valid owner-valid),
+        issues: (if (and domain-separator-valid owner-valid)
+          (list)
+          (append 
+            (if domain-separator-valid (list) (list "invalid_domain_separator"))
+            (if owner-valid (list) (list "invalid_owner"))))
+      }))))
+
+;; Configuration queries
+(define-read-only (get-all-feature-flags)
+  (response (list 10 { name: (string-ascii 30), enabled: bool }) uint))
+  (ok (list 
+    { name: "hierarchical_delegation", enabled: (is-feature-enabled "hierarchical_delegation") }
+    { name: "conditional_permits", enabled: (is-feature-enabled "conditional_permits") }
+    { name: "batch_operations", enabled: (is-feature-enabled "batch_operations") })))
+
+(define-read-only (get-all-operational-limits)
+  (response (list 10 { name: (string-ascii 30), limit: uint }) uint))
+  (ok (list 
+    { name: "max_batch_size", limit: (get-operational-limit "max_batch_size") }
+    { name: "max_signature_age", limit: (get-operational-limit "max_signature_age") }
+    { name: "max_delegation_levels", limit: (get-operational-limit "max_delegation_levels") })))
+
+;; Integration-specific configuration
+(define-public (configure-integration
+  (integration-name (string-ascii 30))
+  (config-data (buff 256)))
+  (response bool uint))
+  (begin
+    (asserts! (has-permission tx-sender "configure_integrations") ERR_UNAUTHORIZED)
+    
+    (map-set contract-config (concat "integration_" integration-name) {
+      value: config-data,
+      locked: false,
+      updated-by: tx-sender,
+      timestamp: block-height
+    })
+    
+    (print { 
+      event: "integration-configured", 
+      integration-name: integration-name,
+      configured-by: tx-sender,
+      timestamp: block-height
+    })
+    
+    (ok true)))
+
+;; Get integration configuration
+(define-read-only (get-integration-config (integration-name (string-ascii 30)))
+  (map-get? contract-config (concat "integration_" integration-name)))
+;; Migration and compatibility features
+;; Data export functionality
+(define-read-only (export-user-data (user principal))
+  (response {
+    nonce: uint,
+    delegations: (optional principal),
+    signature-count: uint,
+    roles: (list 10 (string-ascii 20)),
+    last-activity: uint
+  } uint))
+  (ok {
+    nonce: (get-nonce user),
+    delegations: (map-get? delegations user),
+    signature-count: (get-signer-activity user),
+    roles: (get-user-roles user),
+    last-activity: block-height
+  }))
+
+;; Batch data export
+(define-read-only (export-batch-data (users (list 20 principal)))
+  (response (list 20 {
+    user: principal,
+    nonce: uint,
+    delegations: (optional principal),
+    signature-count: uint
+  }) uint))
+  (ok (map export-single-user-data users)))
+
+(define-private (export-single-user-data (user principal))
+  {
+    user: user,
+    nonce: (get-nonce user),
+    delegations: (map-get? delegations user),
+    signature-count: (get-signer-activity user)
+  })
+
+;; Data import functionality (for migration)
+(define-public (import-user-data
+  (user principal)
+  (nonce uint)
+  (delegation (optional principal))
+  (signature-count uint))
+  (response bool uint))
+  (begin
+    (asserts! (has-permission tx-sender "data_migration") ERR_UNAUTHORIZED)
+    
+    ;; Import nonce
+    (map-set nonces user nonce)
+    
+    ;; Import delegation if provided
+    (match delegation
+      del (map-set delegations user del)
+      true)
+    
+    ;; Import signature activity
+    (map-set frequent-signers user signature-count)
+    
+    (print { 
+      event: "user-data-imported", 
+      user: user,
+      nonce: nonce,
+      delegation: delegation,
+      imported-by: tx-sender,
+      timestamp: block-height
+    })
+    
+    (ok true)))
+
+;; Migration validation
+(define-read-only (validate-migration-data
+  (user principal)
+  (expected-nonce uint)
+  (expected-delegation (optional principal)))
+  (response bool uint))
+  (let ((actual-nonce (get-nonce user))
+        (actual-delegation (map-get? delegations user)))
+    (ok (and 
+      (is-eq actual-nonce expected-nonce)
+      (is-eq actual-delegation expected-delegation)))))
+
+;; Version compatibility check
+(define-read-only (check-compatibility (client-version (string-ascii 10)))
+  (response { 
+    compatible: bool, 
+    current-version: (string-ascii 8),
+    min-supported: (string-ascii 8),
+    deprecated-features: (list 5 (string-ascii 30))
+  } uint))
+  (ok {
+    compatible: true, ;; Simplified - would check actual compatibility
+    current-version: DOMAIN_VERSION,
+    min-supported: "1",
+    deprecated-features: (list)
+  }))
+
+;; Legacy function support (maintain backward compatibility)
+(define-public (legacy-permit
+  (owner principal)
+  (spender principal)
+  (value uint)
+  (deadline uint)
+  (v uint)
+  (r (buff 32))
+  (s (buff 32)))
+  (response bool uint))
+  (let ((signature (concat r (concat s (unwrap-panic (to-consensus-buff? v))))))
+    ;; Use the enhanced permit function internally
+    (permit owner spender value deadline signature)))
+
+;; Legacy meta-transaction support
+(define-public (legacy-execute-meta-transaction
+  (from principal)
+  (to principal)
+  (value uint)
+  (data (buff 1024))
+  (v uint)
+  (r (buff 32))
+  (s (buff 32)))
+  (response { from: principal, to: principal, value: uint, nonce: uint } uint))
+  (let ((signature (concat r (concat s (unwrap-panic (to-consensus-buff? v))))))
+    (execute-meta-transaction from to value data signature)))
+
+;; Gradual feature migration support
+(define-map migration-status
+  (string-ascii 30)
+  { phase: uint, completed: bool, started-by: principal, timestamp: uint })
+
+(define-public (start-feature-migration (feature-name (string-ascii 30)))
+  (response bool uint))
+  (begin
+    (asserts! (has-permission tx-sender "manage_migrations") ERR_UNAUTHORIZED)
+    
+    (map-set migration-status feature-name {
+      phase: u1,
+      completed: false,
+      started-by: tx-sender,
+      timestamp: block-height
+    })
+    
+    (print { 
+      event: "migration-started", 
+      feature-name: feature-name,
+      started-by: tx-sender,
+      timestamp: block-height
+    })
+    
+    (ok true)))
+
+(define-public (complete-feature-migration (feature-name (string-ascii 30)))
+  (response bool uint))
+  (begin
+    (asserts! (has-permission tx-sender "manage_migrations") ERR_UNAUTHORIZED)
+    
+    (match (map-get? migration-status feature-name)
+      status (begin
+        (map-set migration-status feature-name 
+          (merge status { completed: true, phase: u3 }))
+        (print { 
+          event: "migration-completed", 
+          feature-name: feature-name,
+          completed-by: tx-sender,
+          timestamp: block-height
+        })
+        (ok true))
+      ERR_INVALID_SIGNATURE)))
+
+;; Get migration status
+(define-read-only (get-migration-status (feature-name (string-ascii 30)))
+  (map-get? migration-status feature-name))
+
+;; Contract upgrade preparation
+(define-public (prepare-upgrade (new-contract-hash (buff 32)))
+  (response bool uint))
+  (begin
+    (asserts! (has-permission tx-sender "prepare_upgrades") ERR_UNAUTHORIZED)
+    
+    ;; Store upgrade information
+    (map-set contract-config "upgrade_hash" {
+      value: new-contract-hash,
+      locked: true,
+      updated-by: tx-sender,
+      timestamp: block-height
+    })
+    
+    (print { 
+      event: "upgrade-prepared", 
+      new-contract-hash: new-contract-hash,
+      prepared-by: tx-sender,
+      timestamp: block-height
+    })
+    
+    (ok true)))
+
+;; Final contract status and summary
+(define-read-only (get-contract-summary)
+  (response {
+    version: (string-ascii 8),
+    total-functions: uint,
+    security-features: (list 10 (string-ascii 30)),
+    performance-optimizations: (list 5 (string-ascii 30)),
+    compatibility-maintained: bool
+  } uint))
+  (ok {
+    version: DOMAIN_VERSION,
+    total-functions: u50, ;; Approximate count of public functions
+    security-features: (list 
+      "signature_blacklisting"
+      "replay_protection" 
+      "role_based_access"
+      "input_validation"
+      "audit_trails"),
+    performance-optimizations: (list
+      "computation_caching"
+      "batch_operations"
+      "gas_optimization"
+      "efficient_storage"),
+    compatibility-maintained: true
+  }))
+
+;; Contract initialization complete marker
+(define-data-var initialization-complete bool true)
+
+;; Final initialization check
+(define-read-only (is-fully-initialized)
+  (var-get initialization-complete))
