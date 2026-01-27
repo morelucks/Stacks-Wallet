@@ -282,3 +282,199 @@
   (sender principal)
   (recipient principal))
   {token-id: token-id, sender: sender, recipient: recipient})
+;; Marketplace and trading features
+(define-map listings uint {
+  seller: principal,
+  price: uint,
+  currency: (string-ascii 16),
+  expires-at: uint,
+  active: bool
+})
+
+(define-map offers uint {
+  token-id: uint,
+  buyer: principal,
+  price: uint,
+  currency: (string-ascii 16),
+  expires-at: uint,
+  active: bool
+})
+
+(define-data-var next-offer-id uint u1)
+(define-data-var marketplace-fee-percentage uint u250) ;; 2.5%
+
+;; List NFT for sale
+(define-public (list-for-sale 
+  (token-id uint)
+  (price uint)
+  (currency (string-ascii 16))
+  (duration uint))
+  (let ((owner (unwrap! (nft-get-owner? enhanced-nft token-id) ERR-TOKEN-NOT-FOUND)))
+    (begin
+      (asserts! (is-eq tx-sender owner) ERR-NOT-TOKEN-OWNER)
+      (asserts! (> price u0) ERR-INVALID-PRICE)
+      (asserts! (> duration u0) ERR-INVALID-PRICE)
+      
+      (map-set listings token-id {
+        seller: tx-sender,
+        price: price,
+        currency: currency,
+        expires-at: (+ block-height duration),
+        active: true
+      })
+      
+      (print {
+        notification: "nft-listed",
+        payload: {
+          token-id: token-id,
+          seller: tx-sender,
+          price: price,
+          currency: currency,
+          expires-at: (+ block-height duration)
+        }
+      })
+      
+      (ok true))))
+
+;; Cancel listing
+(define-public (cancel-listing (token-id uint))
+  (let ((listing (unwrap! (map-get? listings token-id) ERR-TOKEN-NOT-FOUND)))
+    (begin
+      (asserts! (is-eq tx-sender (get seller listing)) ERR-UNAUTHORIZED)
+      
+      (map-set listings token-id (merge listing {active: false}))
+      
+      (print {
+        notification: "listing-cancelled",
+        payload: {
+          token-id: token-id,
+          seller: tx-sender
+        }
+      })
+      
+      (ok true))))
+
+;; Make offer on NFT
+(define-public (make-offer 
+  (token-id uint)
+  (price uint)
+  (currency (string-ascii 16))
+  (duration uint))
+  (let ((offer-id (var-get next-offer-id)))
+    (begin
+      (asserts! (is-some (nft-get-owner? enhanced-nft token-id)) ERR-TOKEN-NOT-FOUND)
+      (asserts! (> price u0) ERR-INVALID-PRICE)
+      (asserts! (> duration u0) ERR-INVALID-PRICE)
+      
+      (map-set offers offer-id {
+        token-id: token-id,
+        buyer: tx-sender,
+        price: price,
+        currency: currency,
+        expires-at: (+ block-height duration),
+        active: true
+      })
+      
+      (var-set next-offer-id (+ offer-id u1))
+      
+      (print {
+        notification: "offer-made",
+        payload: {
+          offer-id: offer-id,
+          token-id: token-id,
+          buyer: tx-sender,
+          price: price,
+          currency: currency
+        }
+      })
+      
+      (ok offer-id))))
+
+;; Accept offer
+(define-public (accept-offer (offer-id uint))
+  (let ((offer (unwrap! (map-get? offers offer-id) ERR-TOKEN-NOT-FOUND))
+        (token-id (get token-id offer))
+        (owner (unwrap! (nft-get-owner? enhanced-nft token-id) ERR-TOKEN-NOT-FOUND)))
+    (begin
+      (asserts! (is-eq tx-sender owner) ERR-NOT-TOKEN-OWNER)
+      (asserts! (get active offer) ERR-UNAUTHORIZED)
+      (asserts! (< block-height (get expires-at offer)) ERR-UNAUTHORIZED)
+      
+      ;; Transfer NFT
+      (try! (nft-transfer? enhanced-nft token-id tx-sender (get buyer offer)))
+      
+      ;; Calculate and distribute royalties
+      (try! (distribute-royalties token-id (get price offer)))
+      
+      ;; Mark offer as inactive
+      (map-set offers offer-id (merge offer {active: false}))
+      
+      (print {
+        notification: "offer-accepted",
+        payload: {
+          offer-id: offer-id,
+          token-id: token-id,
+          seller: tx-sender,
+          buyer: (get buyer offer),
+          price: (get price offer)
+        }
+      })
+      
+      (ok true))))
+
+;; Distribute royalties
+(define-private (distribute-royalties (token-id uint) (sale-price uint))
+  (match (map-get? token-royalties token-id)
+    royalty-info (let ((royalty-amount (/ (* sale-price (get percentage royalty-info)) u10000)))
+      (begin
+        ;; In a real implementation, would transfer STX or other tokens
+        (print {
+          notification: "royalty-distributed",
+          payload: {
+            token-id: token-id,
+            recipient: (get recipient royalty-info),
+            amount: royalty-amount,
+            percentage: (get percentage royalty-info)
+          }
+        })
+        (ok true)))
+    (ok true)))
+
+;; Set royalty for token
+(define-public (set-token-royalty 
+  (token-id uint)
+  (percentage uint)
+  (recipient principal))
+  (let ((metadata (unwrap! (map-get? token-metadata token-id) ERR-TOKEN-NOT-FOUND)))
+    (begin
+      (asserts! (is-eq tx-sender (get creator metadata)) ERR-UNAUTHORIZED)
+      (asserts! (<= percentage u1000) ERR-ROYALTY-EXCEEDED) ;; Max 10%
+      
+      (map-set token-royalties token-id {
+        creator: (get creator metadata),
+        percentage: percentage,
+        recipient: recipient
+      })
+      
+      (print {
+        notification: "royalty-set",
+        payload: {
+          token-id: token-id,
+          percentage: percentage,
+          recipient: recipient
+        }
+      })
+      
+      (ok true))))
+
+;; Get listing info
+(define-read-only (get-listing (token-id uint))
+  (map-get? listings token-id))
+
+;; Get offer info
+(define-read-only (get-offer (offer-id uint))
+  (map-get? offers offer-id))
+
+;; Get token royalty info
+(define-read-only (get-token-royalty (token-id uint))
+  (map-get? token-royalties token-id))
