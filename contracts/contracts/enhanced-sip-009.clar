@@ -164,3 +164,121 @@
 ;; Check if approved for all
 (define-read-only (is-approved-for-all (owner principal) (operator principal))
   (default-to false (map-get? operator-approvals {owner: owner, operator: operator})))
+;; Batch operations for gas efficiency
+(define-public (batch-mint 
+  (recipients (list 50 principal))
+  (names (list 50 (string-ascii 64)))
+  (descriptions (list 50 (string-ascii 256)))
+  (images (list 50 (string-ascii 256))))
+  (let ((batch-size (len recipients)))
+    (begin
+      (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-OWNER-ONLY)
+      (asserts! (not (var-get contract-paused)) ERR-CONTRACT-PAUSED)
+      (asserts! (<= batch-size u50) ERR-BATCH-SIZE-EXCEEDED)
+      (asserts! (is-eq batch-size (len names)) ERR-BATCH-SIZE-EXCEEDED)
+      (asserts! (is-eq batch-size (len descriptions)) ERR-BATCH-SIZE-EXCEEDED)
+      (asserts! (is-eq batch-size (len images)) ERR-BATCH-SIZE-EXCEEDED)
+      
+      (try! (fold batch-mint-helper 
+        (zip-mint-data recipients names descriptions images) 
+        (ok u0)))
+      
+      (print {
+        notification: "batch-mint-completed",
+        payload: {
+          count: batch-size,
+          starting-id: (+ (var-get last-token-id) u1)
+        }
+      })
+      
+      (ok batch-size))))
+
+;; Helper for batch minting
+(define-private (batch-mint-helper 
+  (mint-data {recipient: principal, name: (string-ascii 64), description: (string-ascii 256), image: (string-ascii 256)})
+  (acc (response uint uint)))
+  (match acc
+    success-count (let ((token-id (+ (var-get last-token-id) u1)))
+      (begin
+        (try! (nft-mint? enhanced-nft token-id (get recipient mint-data)))
+        
+        (map-set token-metadata token-id {
+          name: (get name mint-data),
+          description: (get description mint-data),
+          image: (get image mint-data),
+          attributes: (list),
+          creator: tx-sender,
+          created-at: block-height,
+          rarity: "common"
+        })
+        
+        (var-set last-token-id token-id)
+        (var-set total-supply (+ (var-get total-supply) u1))
+        
+        (ok (+ success-count u1))))
+    error error))
+
+;; Zip helper for batch operations
+(define-private (zip-mint-data 
+  (recipients (list 50 principal))
+  (names (list 50 (string-ascii 64)))
+  (descriptions (list 50 (string-ascii 256)))
+  (images (list 50 (string-ascii 256))))
+  (map create-mint-data recipients names descriptions images))
+
+(define-private (create-mint-data 
+  (recipient principal)
+  (name (string-ascii 64))
+  (description (string-ascii 256))
+  (image (string-ascii 256)))
+  {recipient: recipient, name: name, description: description, image: image})
+
+;; Batch transfer function
+(define-public (batch-transfer 
+  (token-ids (list 50 uint))
+  (senders (list 50 principal))
+  (recipients (list 50 principal)))
+  (let ((batch-size (len token-ids)))
+    (begin
+      (asserts! (not (var-get contract-paused)) ERR-CONTRACT-PAUSED)
+      (asserts! (<= batch-size u50) ERR-BATCH-SIZE-EXCEEDED)
+      (asserts! (is-eq batch-size (len senders)) ERR-BATCH-SIZE-EXCEEDED)
+      (asserts! (is-eq batch-size (len recipients)) ERR-BATCH-SIZE-EXCEEDED)
+      
+      (try! (fold batch-transfer-helper 
+        (zip-transfer-data token-ids senders recipients) 
+        (ok u0)))
+      
+      (print {
+        notification: "batch-transfer-completed",
+        payload: {
+          count: batch-size,
+          token-ids: token-ids
+        }
+      })
+      
+      (ok batch-size))))
+
+;; Helper for batch transfers
+(define-private (batch-transfer-helper 
+  (transfer-data {token-id: uint, sender: principal, recipient: principal})
+  (acc (response uint uint)))
+  (match acc
+    success-count (begin
+      (asserts! (is-authorized (get sender transfer-data) (get token-id transfer-data)) ERR-UNAUTHORIZED)
+      (try! (nft-transfer? enhanced-nft (get token-id transfer-data) (get sender transfer-data) (get recipient transfer-data)))
+      (ok (+ success-count u1)))
+    error error))
+
+;; Zip helper for batch transfers
+(define-private (zip-transfer-data 
+  (token-ids (list 50 uint))
+  (senders (list 50 principal))
+  (recipients (list 50 principal)))
+  (map create-transfer-data token-ids senders recipients))
+
+(define-private (create-transfer-data 
+  (token-id uint)
+  (sender principal)
+  (recipient principal))
+  {token-id: token-id, sender: sender, recipient: recipient})
