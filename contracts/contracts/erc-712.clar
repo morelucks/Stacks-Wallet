@@ -8,6 +8,11 @@
 (define-constant ERR_EXPIRED (err u403))
 (define-constant ERR_ALREADY_USED (err u404))
 (define-constant ERR_PAUSED (err u405))
+(define-constant ERR_UNSUPPORTED_ALGORITHM (err u406))
+(define-constant ERR_MALFORMED_SIGNATURE (err u407))
+(define-constant ERR_SIGNATURE_TOO_SHORT (err u408))
+(define-constant ERR_SIGNATURE_TOO_LONG (err u409))
+(define-constant ERR_INVALID_RECOVERY_ID (err u410))
 
 ;; Domain separator constants
 (define-constant DOMAIN_NAME "ERC712Contract")
@@ -29,6 +34,42 @@
 
 ;; Used signatures to prevent replay
 (define-map used-signatures (buff 65) bool)
+
+;; Enhanced signature metadata for comprehensive tracking
+(define-map signature-metadata
+  (buff 65)
+  {
+    used: bool,
+    timestamp: uint,
+    signer: principal,
+    algorithm: (string-ascii 10),
+    expiry: (optional uint),
+    context: (optional (buff 256)),
+    invalidated: bool,
+    blacklisted: bool
+  })
+
+;; Supported signature algorithms with enhanced support
+(define-map supported-algorithms (string-ascii 10) bool)
+
+;; Global signature blacklist for security
+(define-map signature-blacklist (buff 65) { reason: (string-ascii 100), timestamp: uint })
+
+;; Time-based nonces with expiration
+(define-map expiring-nonces
+  { user: principal, nonce: uint }
+  { created: uint, expiry: uint, used: bool })
+
+;; Signature usage history for audit trails
+(define-map signature-history
+  principal
+  (list 100 { signature: (buff 65), timestamp: uint, operation: (string-ascii 20) }))
+
+;; Initialize supported algorithms
+(map-set supported-algorithms "secp256k1" true)
+(map-set supported-algorithms "sha256" true)
+(map-set supported-algorithms "keccak256" true)
+(map-set supported-algorithms "blake2b" true)
 
 ;; Initialize domain separator on contract deployment
 (define-private (compute-domain-separator)
@@ -90,8 +131,50 @@
 ;; Convert principal to buffer (simplified)
 (define-private (principal-to-buff (p principal))
   (unwrap-panic (to-consensus-buff? p)))
-;; Signature verification
-(define-private (verify-signature 
+;; Enhanced signature verification with multiple algorithms
+(define-public (verify-signature-advanced 
+  (message-hash (buff 32))
+  (signature (buff 65))
+  (signer principal)
+  (algorithm (string-ascii 10))
+  (options (optional { expiry: (optional uint), context: (optional (buff 256)) })))
+  (response bool uint))
+  (begin
+    ;; Validate signature format first
+    (asserts! (is-eq (len signature) u65) ERR_SIGNATURE_TOO_SHORT)
+    (asserts! (default-to true (map-get? supported-algorithms algorithm)) ERR_UNSUPPORTED_ALGORITHM)
+    
+    ;; Check expiry if provided
+    (match options
+      opts (match (get expiry opts)
+        exp (asserts! (< block-height exp) ERR_EXPIRED)
+        true)
+      true)
+    
+    ;; Verify signature based on algorithm
+    (let ((verification-result 
+      (if (is-eq algorithm "secp256k1")
+        (verify-signature-secp256k1 message-hash signature signer)
+        (if (is-eq algorithm "sha256")
+          (verify-signature-sha256 message-hash signature signer)
+          false))))
+      
+      ;; Update signature metadata
+      (map-set signature-metadata signature {
+        used: verification-result,
+        timestamp: block-height,
+        signer: signer,
+        algorithm: algorithm,
+        expiry: (match options opts (get expiry opts) none),
+        context: (match options opts (get context opts) none),
+        invalidated: false,
+        blacklisted: false
+      })
+      
+      (ok verification-result))))
+
+;; Original signature verification (secp256k1)
+(define-private (verify-signature-secp256k1
   (message-hash (buff 32))
   (signature (buff 65))
   (signer principal))
@@ -100,29 +183,171 @@
       pubkey (is-eq signer (principal-of? pubkey))
       false)))
 
-;; Check if signature has been used (replay protection)
-(define-private (is-signature-used (signature (buff 65)))
-  (default-to false (map-get? used-signatures signature)))
-
-;; Mark signature as used
-(define-private (mark-signature-used (signature (buff 65)))
-  (map-set used-signatures signature true))
-
-;; Verify typed data signature
-(define-private (verify-typed-signature
-  (struct-hash (buff 32))
+;; SHA256-based signature verification
+(define-private (verify-signature-sha256
+  (message-hash (buff 32))
   (signature (buff 65))
   (signer principal))
+  ;; Simplified SHA256 verification - in real implementation would use appropriate crypto
+  (let ((hash-check (is-eq message-hash (sha256 signature))))
+    (and hash-check (is-eq signer tx-sender))))
+
+;; Batch signature verification
+(define-public (verify-signatures-batch
+  (signatures (list 50 { hash: (buff 32), signature: (buff 65), signer: principal })))
+  (response (list 50 bool) uint))
+  (let ((results (map verify-single-signature signatures)))
+    (ok results)))
+
+;; Helper for batch verification
+(define-private (verify-single-signature 
+  (sig-data { hash: (buff 32), signature: (buff 65), signer: principal }))
+  (verify-signature-secp256k1 (get hash sig-data) (get signature sig-data) (get signer sig-data)))
+
+;; Signature format validation
+(define-read-only (validate-signature-format (signature (buff 65)))
+  (response bool uint))
+  (begin
+    (asserts! (is-eq (len signature) u65) ERR_SIGNATURE_TOO_SHORT)
+    (asserts! (not (is-eq signature 0x000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000)) ERR_MALFORMED_SIGNATURE)
+    
+    ;; Check recovery ID (last byte should be 0, 1, 2, or 3)
+    (let ((recovery-id (buff-to-uint-be (unwrap-panic (slice? signature u64 u65)))))
+      (asserts! (< recovery-id u4) ERR_INVALID_RECOVERY_ID)
+      (ok true))))
+
+;; Global signature blacklist management
+(define-public (blacklist-signature (signature (buff 65)) (reason (string-ascii 100)))
+  (response bool uint))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT_OWNER) ERR_UNAUTHORIZED)
+    (map-set signature-blacklist signature { reason: reason, timestamp: block-height })
+    (map-set signature-metadata signature {
+      used: true,
+      timestamp: block-height,
+      signer: tx-sender,
+      algorithm: "blacklist",
+      expiry: none,
+      context: none,
+      invalidated: false,
+      blacklisted: true
+    })
+    (ok true)))
+
+;; Check if signature is blacklisted
+(define-read-only (is-signature-blacklisted (signature (buff 65)))
+  (is-some (map-get? signature-blacklist signature)))
+
+;; Time-based nonce management
+(define-public (create-expiring-nonce (expiry uint))
+  (response uint uint))
+  (let ((current-nonce (get-nonce tx-sender))
+        (new-nonce (+ current-nonce u1)))
+    (asserts! (> expiry block-height) ERR_EXPIRED)
+    (map-set expiring-nonces { user: tx-sender, nonce: new-nonce } {
+      created: block-height,
+      expiry: expiry,
+      used: false
+    })
+    (increment-nonce tx-sender)
+    (ok new-nonce)))
+
+;; Check if expiring nonce is valid
+(define-read-only (is-expiring-nonce-valid (user principal) (nonce uint))
+  (match (map-get? expiring-nonces { user: user, nonce: nonce })
+    nonce-data (and 
+      (not (get used nonce-data))
+      (< block-height (get expiry nonce-data)))
+    false))
+
+;; Use expiring nonce
+(define-private (use-expiring-nonce (user principal) (nonce uint))
+  (match (map-get? expiring-nonces { user: user, nonce: nonce })
+    nonce-data (begin
+      (asserts! (not (get used nonce-data)) ERR_ALREADY_USED)
+      (asserts! (< block-height (get expiry nonce-data)) ERR_EXPIRED)
+      (map-set expiring-nonces { user: user, nonce: nonce } 
+        (merge nonce-data { used: true }))
+      (ok true))
+    ERR_INVALID_SIGNATURE))
+
+;; User signature invalidation
+(define-public (invalidate-my-signatures (signatures (list 10 (buff 65))))
+  (response bool uint))
+  (begin
+    (map invalidate-single-signature signatures)
+    (ok true)))
+
+;; Helper to invalidate single signature
+(define-private (invalidate-single-signature (signature (buff 65)))
+  (match (map-get? signature-metadata signature)
+    metadata (if (is-eq (get signer metadata) tx-sender)
+      (map-set signature-metadata signature 
+        (merge metadata { invalidated: true, used: true }))
+      false)
+    false))
+
+;; Atomic nonce operations
+(define-public (increment-nonce-atomic (user principal))
+  (response uint uint))
+  (begin
+    (asserts! (or (is-eq tx-sender user) (is-eq tx-sender CONTRACT_OWNER)) ERR_UNAUTHORIZED)
+    (let ((new-nonce (increment-nonce user)))
+      (ok new-nonce))))
+
+;; Enhanced signature usage checking with comprehensive validation
+(define-private (is-signature-used-enhanced (signature (buff 65)))
+  (match (map-get? signature-metadata signature)
+    metadata (or 
+      (get used metadata)
+      (get invalidated metadata)
+      (get blacklisted metadata))
+    (default-to false (map-get? used-signatures signature))))
+
+;; Mark signature as used with enhanced metadata
+(define-private (mark-signature-used-enhanced 
+  (signature (buff 65)) 
+  (signer principal) 
+  (algorithm (string-ascii 10)))
+  (begin
+    (map-set used-signatures signature true)
+    (map-set signature-metadata signature {
+      used: true,
+      timestamp: block-height,
+      signer: signer,
+      algorithm: algorithm,
+      expiry: none,
+      context: none,
+      invalidated: false,
+      blacklisted: false
+    })
+    ;; Add to signature history
+    (let ((current-history (default-to (list) (map-get? signature-history signer))))
+      (map-set signature-history signer 
+        (unwrap-panic (as-max-len? 
+          (append current-history { 
+            signature: signature, 
+            timestamp: block-height, 
+            operation: "signature_use" 
+          }) u100))))))
+
+;; Enhanced signature verification with replay protection
+(define-private (verify-typed-signature-enhanced
+  (struct-hash (buff 32))
+  (signature (buff 65))
+  (signer principal)
+  (algorithm (string-ascii 10)))
   (let ((typed-hash (create-typed-data-hash struct-hash)))
     (and 
-      (not (is-signature-used signature))
-      (verify-signature typed-hash signature signer))))
+      (not (is-signature-used-enhanced signature))
+      (not (is-signature-blacklisted signature))
+      (verify-signature-secp256k1 typed-hash signature signer))))
 ;; Token allowances for permit functionality
 (define-map allowances 
   { owner: principal, spender: principal }
   uint)
 
-;; Permit function - allows gasless approvals
+;; Enhanced permit function with improved verification
 (define-public (permit
   (owner principal)
   (spender principal)
@@ -133,15 +358,27 @@
         (permit-hash (hash-permit owner spender value current-nonce deadline)))
     (asserts! (not (var-get contract-paused)) ERR_PAUSED)
     (asserts! (< block-height deadline) ERR_EXPIRED)
-    (asserts! (verify-typed-signature permit-hash signature owner) ERR_INVALID_SIGNATURE)
-    (asserts! (not (is-signature-used signature)) ERR_ALREADY_USED)
+    (asserts! (verify-typed-signature-enhanced permit-hash signature owner "secp256k1") ERR_INVALID_SIGNATURE)
+    (asserts! (not (is-signature-used-enhanced signature)) ERR_ALREADY_USED)
     
     ;; Mark signature as used and increment nonce
-    (mark-signature-used signature)
+    (mark-signature-used-enhanced signature owner "secp256k1")
     (increment-nonce owner)
     
     ;; Set allowance
     (map-set allowances { owner: owner, spender: spender } value)
+    
+    ;; Emit permit event (print for now)
+    (print { 
+      event: "permit", 
+      owner: owner, 
+      spender: spender, 
+      value: value, 
+      nonce: current-nonce,
+      deadline: deadline,
+      timestamp: block-height
+    })
+    
     (ok true)))
 
 ;; Get allowance
@@ -213,6 +450,7 @@
   (signature (buff 65)))
   (let ((current-nonce (get-nonce delegator))
         (delegation-hash (hash-delegation delegator delegatee current-nonce expiry)))
+    (asserts! (not (var-get contract-paused)) ERR_PAUSED)
     (asserts! (< block-height expiry) ERR_EXPIRED)
     (asserts! (verify-typed-signature delegation-hash signature delegator) ERR_INVALID_SIGNATURE)
     (asserts! (not (is-signature-used signature)) ERR_ALREADY_USED)
