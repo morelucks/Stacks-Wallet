@@ -187,6 +187,10 @@
     (begin
       (asserts! (get active validator-info) ERR-NOT-AUTHORIZED)
       (asserts! (is-eq (get status request) "pending") ERR-INVALID-REQUEST)
+      (asserts! (< (- block-height (get created-at request)) (var-get bridge-timeout-blocks)) ERR-REQUEST-EXPIRED)
+      
+      ;; Verify signature format
+      (asserts! (is-eq (len signature) u65) ERR-INVALID-SIGNATURE)
       
       ;; Add validator signature
       (let ((current-signatures (get validator-signatures request)))
@@ -198,7 +202,8 @@
         ;; Update validator stats
         (map-set bridge-validators tx-sender
           (merge validator-info {
-            total-validations: (+ (get total-validations validator-info) u1)
+            total-validations: (+ (get total-validations validator-info) u1),
+            reputation-score: (+ (get reputation-score validator-info) u1)
           }))
         
         ;; Check if we have enough signatures
