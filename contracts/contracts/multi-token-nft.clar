@@ -4834,3 +4834,259 @@
 (define-read-only (get-staking-stats (pool-id uint))
   (ok (map-get? staking-stats {pool-id: pool-id}))
 )
+
+;; ===== TOKEN GOVERNANCE AND VOTING SYSTEM =====
+
+;; Governance proposals
+(define-map governance-proposals {proposal-id: uint} {
+  title: (string-utf8 128),
+  description: (string-utf8 512),
+  proposer: principal,
+  token-id: uint, ;; Governance token
+  voting-power-required: uint,
+  votes-for: uint,
+  votes-against: uint,
+  votes-abstain: uint,
+  status: (string-ascii 16), ;; "active", "passed", "rejected", "executed"
+  created-at: uint,
+  voting-ends-at: uint,
+  execution-delay: uint
+})
+
+;; User votes
+(define-map user-votes {proposal-id: uint, voter: principal} {
+  vote: (string-ascii 8), ;; "for", "against", "abstain"
+  voting-power: uint,
+  voted-at: uint
+})
+
+;; Governance settings per token
+(define-map governance-settings {token-id: uint} {
+  min-proposal-threshold: uint, ;; Minimum tokens needed to propose
+  voting-period: uint, ;; Blocks for voting
+  execution-delay: uint, ;; Blocks before execution
+  quorum-threshold: uint, ;; Minimum participation required
+  pass-threshold: uint ;; Percentage needed to pass (basis points)
+})
+
+;; Proposal counter
+(define-data-var next-proposal-id uint u1)
+
+;; Delegate voting power
+(define-map voting-delegates {token-id: uint, delegator: principal} principal)
+
+;; Setup governance for token
+(define-public (setup-governance
+  (token-id uint)
+  (min-proposal-threshold uint)
+  (voting-period uint)
+  (execution-delay uint)
+  (quorum-threshold uint)
+  (pass-threshold uint)
+)
+  (begin
+    ;; Validation
+    (asserts! (token-exists-check token-id) ERR_TOKEN_NOT_FOUND)
+    (asserts! (is-token-creator token-id tx-sender) ERR_UNAUTHORIZED)
+    (asserts! (> voting-period u0) ERR_INVALID_PARAMETER)
+    (asserts! (<= pass-threshold u10000) ERR_INVALID_PARAMETER)
+    
+    ;; Set governance parameters
+    (map-set governance-settings {token-id: token-id} {
+      min-proposal-threshold: min-proposal-threshold,
+      voting-period: voting-period,
+      execution-delay: execution-delay,
+      quorum-threshold: quorum-threshold,
+      pass-threshold: pass-threshold
+    })
+    
+    (log-structured-event "governance-setup" "governance" "info" "Governance configured")
+    (ok true)
+  )
+)
+
+;; Create governance proposal
+(define-public (create-proposal
+  (token-id uint)
+  (title (string-utf8 128))
+  (description (string-utf8 512))
+  (voting-power-required uint)
+)
+  (let (
+    (proposal-id (var-get next-proposal-id))
+    (governance-config (unwrap! (map-get? governance-settings {token-id: token-id}) ERR_TOKEN_NOT_FOUND))
+    (user-balance (default-to u0 (map-get? token-balances {token-id: token-id, owner: tx-sender})))
+    (current-time (default-to u0 (get-block-info? time (- block-height u1))))
+    (voting-ends-at (+ block-height (get voting-period governance-config)))
+  )
+    (begin
+      ;; Validation
+      (try! (assert-not-paused))
+      (asserts! (>= user-balance (get min-proposal-threshold governance-config)) ERR_UNAUTHORIZED)
+      (asserts! (> (len title) u0) ERR_INVALID_PARAMETER)
+      (asserts! (> (len description) u0) ERR_INVALID_PARAMETER)
+      
+      ;; Create proposal
+      (map-set governance-proposals {proposal-id: proposal-id} {
+        title: title,
+        description: description,
+        proposer: tx-sender,
+        token-id: token-id,
+        voting-power-required: voting-power-required,
+        votes-for: u0,
+        votes-against: u0,
+        votes-abstain: u0,
+        status: "active",
+        created-at: current-time,
+        voting-ends-at: voting-ends-at,
+        execution-delay: (get execution-delay governance-config)
+      })
+      
+      ;; Increment proposal ID
+      (var-set next-proposal-id (+ proposal-id u1))
+      
+      (log-structured-event "proposal-created" "governance" "info" title)
+      (print {
+        notification: "proposal-created",
+        payload: {
+          proposal-id: proposal-id,
+          title: title,
+          proposer: tx-sender,
+          token-id: token-id,
+          voting-ends-at: voting-ends-at
+        }
+      })
+      
+      (ok proposal-id)
+    )
+  )
+)
+
+;; Vote on proposal
+(define-public (vote-on-proposal
+  (proposal-id uint)
+  (vote (string-ascii 8))
+  (voting-power uint)
+)
+  (let (
+    (proposal-data (unwrap! (map-get? governance-proposals {proposal-id: proposal-id}) ERR_TOKEN_NOT_FOUND))
+    (token-id (get token-id proposal-data))
+    (user-balance (default-to u0 (map-get? token-balances {token-id: token-id, owner: tx-sender})))
+    (vote-key {proposal-id: proposal-id, voter: tx-sender})
+  )
+    (begin
+      ;; Validation
+      (try! (assert-not-paused))
+      (asserts! (is-eq (get status proposal-data) "active") ERR_INVALID_STATE)
+      (asserts! (< block-height (get voting-ends-at proposal-data)) ERR_INVALID_STATE)
+      (asserts! (>= user-balance voting-power) ERR_INSUFFICIENT_BALANCE)
+      (asserts! (is-none (map-get? user-votes vote-key)) ERR_INVALID_STATE) ;; No double voting
+      (asserts! (or (is-eq vote "for") (or (is-eq vote "against") (is-eq vote "abstain"))) ERR_INVALID_PARAMETER)
+      
+      ;; Record vote
+      (map-set user-votes vote-key {
+        vote: vote,
+        voting-power: voting-power,
+        voted-at: (default-to u0 (get-block-info? time (- block-height u1)))
+      })
+      
+      ;; Update proposal vote counts
+      (map-set governance-proposals {proposal-id: proposal-id}
+        (if (is-eq vote "for")
+          (merge proposal-data {votes-for: (+ (get votes-for proposal-data) voting-power)})
+          (if (is-eq vote "against")
+            (merge proposal-data {votes-against: (+ (get votes-against proposal-data) voting-power)})
+            (merge proposal-data {votes-abstain: (+ (get votes-abstain proposal-data) voting-power)})
+          )
+        )
+      )
+      
+      (log-structured-event "vote-cast" "governance" "info" vote)
+      (ok true)
+    )
+  )
+)
+
+;; Finalize proposal voting
+(define-public (finalize-proposal (proposal-id uint))
+  (let (
+    (proposal-data (unwrap! (map-get? governance-proposals {proposal-id: proposal-id}) ERR_TOKEN_NOT_FOUND))
+    (token-id (get token-id proposal-data))
+    (governance-config (unwrap! (map-get? governance-settings {token-id: token-id}) ERR_TOKEN_NOT_FOUND))
+    (total-votes (+ (+ (get votes-for proposal-data) (get votes-against proposal-data)) (get votes-abstain proposal-data)))
+    (total-supply (default-to u0 (map-get? token-supplies token-id)))
+  )
+    (begin
+      ;; Validation
+      (asserts! (is-eq (get status proposal-data) "active") ERR_INVALID_STATE)
+      (asserts! (>= block-height (get voting-ends-at proposal-data)) ERR_INVALID_STATE)
+      
+      ;; Check quorum
+      (let (
+        (quorum-met (>= (* total-votes u10000) (* total-supply (get quorum-threshold governance-config))))
+        (votes-needed (/ (* total-votes (get pass-threshold governance-config)) u10000))
+        (proposal-passed (and quorum-met (>= (get votes-for proposal-data) votes-needed)))
+      )
+        ;; Update proposal status
+        (map-set governance-proposals {proposal-id: proposal-id}
+          (merge proposal-data {
+            status: (if proposal-passed "passed" "rejected")
+          })
+        )
+        
+        (log-structured-event "proposal-finalized" "governance" "info" 
+          (if proposal-passed "Proposal passed" "Proposal rejected"))
+        
+        (ok proposal-passed)
+      )
+    )
+  )
+)
+
+;; Delegate voting power
+(define-public (delegate-voting-power (token-id uint) (delegate principal))
+  (begin
+    ;; Validation
+    (try! (assert-not-paused))
+    (asserts! (token-exists-check token-id) ERR_TOKEN_NOT_FOUND)
+    (asserts! (is-valid-recipient delegate) ERR_INVALID_RECIPIENT)
+    (asserts! (not (is-eq delegate tx-sender)) ERR_INVALID_PARAMETER)
+    
+    ;; Set delegate
+    (map-set voting-delegates {token-id: token-id, delegator: tx-sender} delegate)
+    
+    (log-structured-event "voting-delegated" "governance" "info" "Voting power delegated")
+    (ok true)
+  )
+)
+
+;; Get proposal info
+(define-read-only (get-proposal (proposal-id uint))
+  (ok (map-get? governance-proposals {proposal-id: proposal-id}))
+)
+
+;; Get user vote
+(define-read-only (get-user-vote (proposal-id uint) (voter principal))
+  (ok (map-get? user-votes {proposal-id: proposal-id, voter: voter}))
+)
+
+;; Get governance settings
+(define-read-only (get-governance-settings (token-id uint))
+  (ok (map-get? governance-settings {token-id: token-id}))
+)
+
+;; Get voting delegate
+(define-read-only (get-voting-delegate (token-id uint) (delegator principal))
+  (ok (map-get? voting-delegates {token-id: token-id, delegator: delegator}))
+)
+
+;; Calculate voting power (including delegated)
+(define-read-only (calculate-voting-power (token-id uint) (user principal))
+  (let (
+    (own-balance (default-to u0 (map-get? token-balances {token-id: token-id, owner: user})))
+    ;; Would need to calculate delegated power from others
+    (delegated-power u0)
+  )
+    (ok (+ own-balance delegated-power))
+  )
+)
