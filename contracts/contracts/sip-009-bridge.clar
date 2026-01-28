@@ -435,7 +435,32 @@
 (define-public (set-min-validator-signatures (min-sigs uint))
   (begin
     (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+    (asserts! (and (>= min-sigs u1) (<= min-sigs u10)) ERR-INVALID-REQUEST)
     (var-set min-validator-signatures min-sigs)
+    (ok true)))
+
+;; Set bridge timeout
+(define-public (set-bridge-timeout (timeout-blocks uint))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+    (asserts! (and (>= timeout-blocks u6) (<= timeout-blocks u1008)) ERR-INVALID-REQUEST) ;; 1 hour to 1 week
+    (var-set bridge-timeout-blocks timeout-blocks)
+    (ok true)))
+
+;; Remove inactive validator
+(define-public (remove-validator (validator principal))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+    (map-delete bridge-validators validator)
+    
+    (print {
+      notification: "validator-removed",
+      payload: {
+        validator: validator,
+        removed-by: tx-sender
+      }
+    })
+    
     (ok true)))
 
 ;; Emergency functions
