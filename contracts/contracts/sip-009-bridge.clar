@@ -96,13 +96,18 @@
   (target-chain (string-ascii 32))
   (target-address (string-ascii 64)))
   (let ((request-id (var-get next-bridge-request-id))
-        (chain-config (unwrap! (map-get? chain-configs target-chain) ERR-INVALID-CHAIN)))
+        (chain-config (unwrap! (map-get? chain-configs target-chain) ERR-INVALID-CHAIN))
+        (bridge-fee (get bridge-fee chain-config)))
     (begin
       (asserts! (var-get bridge-enabled) ERR-BRIDGE-DISABLED)
       (asserts! (get active chain-config) ERR-INVALID-CHAIN)
+      (asserts! (>= (stx-get-balance tx-sender) bridge-fee) ERR-INSUFFICIENT-BALANCE)
       
       ;; Verify token ownership (would integrate with main NFT contract)
       (asserts! (is-token-owner token-id tx-sender) ERR-NOT-AUTHORIZED)
+      
+      ;; Charge bridge fee
+      (try! (stx-transfer? bridge-fee tx-sender CONTRACT-OWNER))
       
       ;; Lock the token
       (try! (lock-token token-id request-id))
@@ -128,7 +133,8 @@
           token-id: token-id,
           target-chain: target-chain,
           target-address: target-address,
-          owner: tx-sender
+          owner: tx-sender,
+          fee-paid: bridge-fee
         }
       })
       
