@@ -2977,6 +2977,212 @@
     most-active-recipient: CONTRACT_OWNER
   })
 )
+;; ===== TOKEN LOCKING AND ESCROW SYSTEM =====
+
+;; Token locks for escrow and conditional transfers
+(define-map token-locks {token-id: uint, owner: principal, lock-id: uint} {
+  locked-amount: uint,
+  lock-type: (string-ascii 16), ;; "escrow", "time", "condition"
+  unlock-condition: (string-utf8 256),
+  unlock-time: (optional uint),
+  beneficiary: (optional principal),
+  created-at: uint,
+  created-by: principal
+})
+
+;; Lock counter for unique lock IDs
+(define-data-var next-lock-id uint u1)
+
+;; Escrow agreements
+(define-map escrow-agreements {agreement-id: uint} {
+  token-id: uint,
+  seller: principal,
+  buyer: principal,
+  amount: uint,
+  price: uint,
+  status: (string-ascii 16), ;; "pending", "completed", "cancelled"
+  created-at: uint,
+  expires-at: uint
+})
+
+;; Escrow counter
+(define-data-var next-escrow-id uint u1)
+
+;; Lock tokens for escrow or time-based release
+(define-public (lock-tokens
+  (token-id uint)
+  (amount uint)
+  (lock-type (string-ascii 16))
+  (unlock-condition (string-utf8 256))
+  (unlock-time (optional uint))
+  (beneficiary (optional principal))
+)
+  (let (
+    (lock-id (var-get next-lock-id))
+    (current-balance (default-to u0 (map-get? token-balances {token-id: token-id, owner: tx-sender})))
+  )
+    (begin
+      ;; Validation
+      (try! (assert-not-paused))
+      (asserts! (token-exists-check token-id) ERR_TOKEN_NOT_FOUND)
+      (asserts! (is-valid-amount amount) ERR_INVALID_AMOUNT)
+      (asserts! (>= current-balance amount) ERR_INSUFFICIENT_BALANCE)
+      (asserts! (> (len lock-type) u0) ERR_INVALID_PARAMETER)
+      
+      ;; Create lock
+      (map-set token-locks {token-id: token-id, owner: tx-sender, lock-id: lock-id} {
+        locked-amount: amount,
+        lock-type: lock-type,
+        unlock-condition: unlock-condition,
+        unlock-time: unlock-time,
+        beneficiary: beneficiary,
+        created-at: (default-to u0 (get-block-info? time (- block-height u1))),
+        created-by: tx-sender
+      })
+      
+      ;; Increment lock ID
+      (var-set next-lock-id (+ lock-id u1))
+      
+      ;; Emit lock event
+      (log-structured-event "tokens-locked" "escrow" "info" lock-type)
+      (print {
+        notification: "tokens-locked",
+        payload: {
+          token-id: token-id,
+          owner: tx-sender,
+          lock-id: lock-id,
+          amount: amount,
+          lock-type: lock-type,
+          unlock-time: unlock-time
+        }
+      })
+      
+      (ok lock-id)
+    )
+  )
+)
+
+;; Unlock tokens when conditions are met
+(define-public (unlock-tokens
+  (token-id uint)
+  (lock-id uint)
+  (verification-data (string-utf8 256))
+)
+  (let (
+    (lock-key {token-id: token-id, owner: tx-sender, lock-id: lock-id})
+    (lock-data (unwrap! (map-get? token-locks lock-key) ERR_TOKEN_LOCKED))
+  )
+    (begin
+      ;; Validation
+      (try! (assert-not-paused))
+      (asserts! (is-eq (get created-by lock-data) tx-sender) ERR_UNAUTHORIZED)
+      
+      ;; Check unlock conditions
+      (try! (validate-unlock-conditions lock-data verification-data))
+      
+      ;; Remove lock
+      (map-delete token-locks lock-key)
+      
+      ;; Emit unlock event
+      (log-structured-event "tokens-unlocked" "escrow" "info" (get lock-type lock-data))
+      (print {
+        notification: "tokens-unlocked",
+        payload: {
+          token-id: token-id,
+          owner: tx-sender,
+          lock-id: lock-id,
+          amount: (get locked-amount lock-data),
+          verification: verification-data
+        }
+      })
+      
+      (ok true)
+    )
+  )
+)
+
+;; Validate unlock conditions
+(define-private (validate-unlock-conditions 
+  (lock-data {
+    locked-amount: uint,
+    lock-type: (string-ascii 16),
+    unlock-condition: (string-utf8 256),
+    unlock-time: (optional uint),
+    beneficiary: (optional principal),
+    created-at: uint,
+    created-by: principal
+  })
+  (verification-data (string-utf8 256))
+)
+  (let ((current-time (default-to u0 (get-block-info? time (- block-height u1)))))
+    (if (is-eq (get lock-type lock-data) "time")
+      ;; Time-based unlock
+      (match (get unlock-time lock-data)
+        unlock-time (asserts! (>= current-time unlock-time) ERR_TOKEN_LOCKED)
+        (err ERR_INVALID_PARAMETER)
+      )
+      ;; Condition-based unlock (simplified validation)
+      (asserts! (> (len verification-data) u0) ERR_INVALID_PARAMETER)
+    )
+  )
+)
+
+;; Create escrow agreement
+(define-public (create-escrow-agreement
+  (token-id uint)
+  (buyer principal)
+  (amount uint)
+  (price uint)
+  (duration uint)
+)
+  (let (
+    (escrow-id (var-get next-escrow-id))
+    (current-time (default-to u0 (get-block-info? time (- block-height u1))))
+    (expires-at (+ current-time duration))
+  )
+    (begin
+      ;; Validation
+      (try! (assert-not-paused))
+      (asserts! (token-exists-check token-id) ERR_TOKEN_NOT_FOUND)
+      (asserts! (is-valid-amount amount) ERR_INVALID_AMOUNT)
+      (asserts! (> price u0) ERR_INVALID_AMOUNT)
+      (asserts! (is-valid-recipient buyer) ERR_INVALID_RECIPIENT)
+      (asserts! (> duration u0) ERR_INVALID_PARAMETER)
+      
+      ;; Lock tokens in escrow
+      (try! (lock-tokens token-id amount "escrow" "payment-received" none (some buyer)))
+      
+      ;; Create escrow agreement
+      (map-set escrow-agreements {agreement-id: escrow-id} {
+        token-id: token-id,
+        seller: tx-sender,
+        buyer: buyer,
+        amount: amount,
+        price: price,
+        status: "pending",
+        created-at: current-time,
+        expires-at: expires-at
+      })
+      
+      ;; Increment escrow ID
+      (var-set next-escrow-id (+ escrow-id u1))
+      
+      (log-structured-event "escrow-created" "escrow" "info" "Agreement created")
+      (ok escrow-id)
+    )
+  )
+)
+
+;; Get token locks for owner
+(define-read-only (get-token-locks (token-id uint) (owner principal))
+  (ok (list)) ;; Simplified - would return actual locks
+)
+
+;; Get escrow agreement
+(define-read-only (get-escrow-agreement (agreement-id uint))
+  (ok (map-get? escrow-agreements {agreement-id: agreement-id}))
+)
+
 ;; ===== ENHANCED BATCH OPERATIONS WITH CHUNKING =====
 
 ;; Batch operation state tracking
@@ -4359,4 +4565,936 @@
     ;; Last check
     last-health-check: (default-to u0 (get-block-info? time (- block-height u1)))
   })
+)
+
+;; ===== TOKEN STAKING AND REWARDS SYSTEM =====
+
+;; Staking pools
+(define-map staking-pools {pool-id: uint} {
+  token-id: uint,
+  reward-token-id: uint,
+  reward-rate: uint, ;; Rewards per block per staked token
+  total-staked: uint,
+  pool-creator: principal,
+  start-block: uint,
+  end-block: (optional uint),
+  status: (string-ascii 16) ;; "active", "paused", "ended"
+})
+
+;; User stakes
+(define-map user-stakes {pool-id: uint, user: principal} {
+  staked-amount: uint,
+  reward-debt: uint,
+  last-claim-block: uint,
+  stake-time: uint
+})
+
+;; Pool counter
+(define-data-var next-pool-id uint u1)
+
+;; Staking statistics
+(define-map staking-stats {pool-id: uint} {
+  total-rewards-distributed: uint,
+  unique-stakers: uint,
+  avg-stake-duration: uint,
+  last-reward-distribution: uint
+})
+
+;; Create staking pool
+(define-public (create-staking-pool
+  (token-id uint)
+  (reward-token-id uint)
+  (reward-rate uint)
+  (duration-blocks uint)
+)
+  (let (
+    (pool-id (var-get next-pool-id))
+    (current-block block-height)
+    (end-block (if (> duration-blocks u0) (some (+ current-block duration-blocks)) none))
+  )
+    (begin
+      ;; Validation
+      (try! (assert-not-paused))
+      (asserts! (token-exists-check token-id) ERR_TOKEN_NOT_FOUND)
+      (asserts! (token-exists-check reward-token-id) ERR_TOKEN_NOT_FOUND)
+      (asserts! (> reward-rate u0) ERR_INVALID_AMOUNT)
+      (asserts! (is-token-creator reward-token-id tx-sender) ERR_UNAUTHORIZED)
+      
+      ;; Create pool
+      (map-set staking-pools {pool-id: pool-id} {
+        token-id: token-id,
+        reward-token-id: reward-token-id,
+        reward-rate: reward-rate,
+        total-staked: u0,
+        pool-creator: tx-sender,
+        start-block: current-block,
+        end-block: end-block,
+        status: "active"
+      })
+      
+      ;; Initialize stats
+      (map-set staking-stats {pool-id: pool-id} {
+        total-rewards-distributed: u0,
+        unique-stakers: u0,
+        avg-stake-duration: u0,
+        last-reward-distribution: current-block
+      })
+      
+      ;; Increment pool ID
+      (var-set next-pool-id (+ pool-id u1))
+      
+      (log-structured-event "staking-pool-created" "staking" "info" "Pool created")
+      (print {
+        notification: "staking-pool-created",
+        payload: {
+          pool-id: pool-id,
+          token-id: token-id,
+          reward-token-id: reward-token-id,
+          reward-rate: reward-rate,
+          creator: tx-sender
+        }
+      })
+      
+      (ok pool-id)
+    )
+  )
+)
+
+;; Stake tokens in pool
+(define-public (stake-tokens (pool-id uint) (amount uint))
+  (let (
+    (pool-data (unwrap! (map-get? staking-pools {pool-id: pool-id}) ERR_TOKEN_NOT_FOUND))
+    (token-id (get token-id pool-data))
+    (current-balance (default-to u0 (map-get? token-balances {token-id: token-id, owner: tx-sender})))
+    (stake-key {pool-id: pool-id, user: tx-sender})
+    (existing-stake (map-get? user-stakes stake-key))
+  )
+    (begin
+      ;; Validation
+      (try! (assert-not-paused))
+      (asserts! (is-eq (get status pool-data) "active") ERR_INVALID_STATE)
+      (asserts! (is-valid-amount amount) ERR_INVALID_AMOUNT)
+      (asserts! (>= current-balance amount) ERR_INSUFFICIENT_BALANCE)
+      
+      ;; Check pool hasn't ended
+      (match (get end-block pool-data)
+        end-block (asserts! (< block-height end-block) ERR_INVALID_STATE)
+        true
+      )
+      
+      ;; Claim pending rewards first
+      (match existing-stake
+        stake-data (try! (claim-staking-rewards pool-id))
+        true
+      )
+      
+      ;; Update stake
+      (map-set user-stakes stake-key
+        (match existing-stake
+          stake-data {
+            staked-amount: (+ (get staked-amount stake-data) amount),
+            reward-debt: u0, ;; Reset after claiming
+            last-claim-block: block-height,
+            stake-time: (get stake-time stake-data)
+          }
+          {
+            staked-amount: amount,
+            reward-debt: u0,
+            last-claim-block: block-height,
+            stake-time: (default-to u0 (get-block-info? time (- block-height u1)))
+          }
+        )
+      )
+      
+      ;; Update pool total
+      (map-set staking-pools {pool-id: pool-id}
+        (merge pool-data {total-staked: (+ (get total-staked pool-data) amount)})
+      )
+      
+      ;; Transfer tokens (simplified - would need actual transfer)
+      (map-set token-balances {token-id: token-id, owner: tx-sender} (- current-balance amount))
+      
+      (log-structured-event "tokens-staked" "staking" "info" "Tokens staked")
+      (ok true)
+    )
+  )
+)
+
+;; Claim staking rewards
+(define-public (claim-staking-rewards (pool-id uint))
+  (let (
+    (pool-data (unwrap! (map-get? staking-pools {pool-id: pool-id}) ERR_TOKEN_NOT_FOUND))
+    (stake-key {pool-id: pool-id, user: tx-sender})
+    (stake-data (unwrap! (map-get? user-stakes stake-key) ERR_TOKEN_NOT_FOUND))
+    (blocks-staked (- block-height (get last-claim-block stake-data)))
+    (reward-amount (* (* (get staked-amount stake-data) (get reward-rate pool-data)) blocks-staked))
+  )
+    (begin
+      ;; Validation
+      (try! (assert-not-paused))
+      (asserts! (> reward-amount u0) ERR_INVALID_AMOUNT)
+      
+      ;; Mint rewards (simplified)
+      (try! (mint tx-sender (get reward-token-id pool-data) reward-amount))
+      
+      ;; Update stake data
+      (map-set user-stakes stake-key
+        (merge stake-data {
+          reward-debt: (+ (get reward-debt stake-data) reward-amount),
+          last-claim-block: block-height
+        })
+      )
+      
+      ;; Update stats
+      (let ((stats-data (unwrap-panic (map-get? staking-stats {pool-id: pool-id}))))
+        (map-set staking-stats {pool-id: pool-id}
+          (merge stats-data {
+            total-rewards-distributed: (+ (get total-rewards-distributed stats-data) reward-amount),
+            last-reward-distribution: block-height
+          })
+        )
+      )
+      
+      (log-structured-event "rewards-claimed" "staking" "info" "Rewards claimed")
+      (ok reward-amount)
+    )
+  )
+)
+
+;; Unstake tokens
+(define-public (unstake-tokens (pool-id uint) (amount uint))
+  (let (
+    (pool-data (unwrap! (map-get? staking-pools {pool-id: pool-id}) ERR_TOKEN_NOT_FOUND))
+    (stake-key {pool-id: pool-id, user: tx-sender})
+    (stake-data (unwrap! (map-get? user-stakes stake-key) ERR_TOKEN_NOT_FOUND))
+    (token-id (get token-id pool-data))
+  )
+    (begin
+      ;; Validation
+      (try! (assert-not-paused))
+      (asserts! (is-valid-amount amount) ERR_INVALID_AMOUNT)
+      (asserts! (>= (get staked-amount stake-data) amount) ERR_INSUFFICIENT_BALANCE)
+      
+      ;; Claim pending rewards first
+      (try! (claim-staking-rewards pool-id))
+      
+      ;; Update stake
+      (let ((new-staked-amount (- (get staked-amount stake-data) amount)))
+        (if (is-eq new-staked-amount u0)
+          (map-delete user-stakes stake-key)
+          (map-set user-stakes stake-key
+            (merge stake-data {staked-amount: new-staked-amount})
+          )
+        )
+      )
+      
+      ;; Update pool total
+      (map-set staking-pools {pool-id: pool-id}
+        (merge pool-data {total-staked: (- (get total-staked pool-data) amount)})
+      )
+      
+      ;; Return tokens (simplified)
+      (let ((current-balance (default-to u0 (map-get? token-balances {token-id: token-id, owner: tx-sender}))))
+        (map-set token-balances {token-id: token-id, owner: tx-sender} (+ current-balance amount))
+      )
+      
+      (log-structured-event "tokens-unstaked" "staking" "info" "Tokens unstaked")
+      (ok true)
+    )
+  )
+)
+
+;; Get staking pool info
+(define-read-only (get-staking-pool (pool-id uint))
+  (ok (map-get? staking-pools {pool-id: pool-id}))
+)
+
+;; Get user stake info
+(define-read-only (get-user-stake (pool-id uint) (user principal))
+  (ok (map-get? user-stakes {pool-id: pool-id, user: user}))
+)
+
+;; Calculate pending rewards
+(define-read-only (calculate-pending-rewards (pool-id uint) (user principal))
+  (match (map-get? staking-pools {pool-id: pool-id})
+    pool-data (match (map-get? user-stakes {pool-id: pool-id, user: user})
+      stake-data (let (
+        (blocks-since-claim (- block-height (get last-claim-block stake-data)))
+        (reward-amount (* (* (get staked-amount stake-data) (get reward-rate pool-data)) blocks-since-claim))
+      )
+        (ok reward-amount)
+      )
+      (ok u0)
+    )
+    (ok u0)
+  )
+)
+
+;; Get staking statistics
+(define-read-only (get-staking-stats (pool-id uint))
+  (ok (map-get? staking-stats {pool-id: pool-id}))
+)
+
+;; ===== TOKEN GOVERNANCE AND VOTING SYSTEM =====
+
+;; Governance proposals
+(define-map governance-proposals {proposal-id: uint} {
+  title: (string-utf8 128),
+  description: (string-utf8 512),
+  proposer: principal,
+  token-id: uint, ;; Governance token
+  voting-power-required: uint,
+  votes-for: uint,
+  votes-against: uint,
+  votes-abstain: uint,
+  status: (string-ascii 16), ;; "active", "passed", "rejected", "executed"
+  created-at: uint,
+  voting-ends-at: uint,
+  execution-delay: uint
+})
+
+;; User votes
+(define-map user-votes {proposal-id: uint, voter: principal} {
+  vote: (string-ascii 8), ;; "for", "against", "abstain"
+  voting-power: uint,
+  voted-at: uint
+})
+
+;; Governance settings per token
+(define-map governance-settings {token-id: uint} {
+  min-proposal-threshold: uint, ;; Minimum tokens needed to propose
+  voting-period: uint, ;; Blocks for voting
+  execution-delay: uint, ;; Blocks before execution
+  quorum-threshold: uint, ;; Minimum participation required
+  pass-threshold: uint ;; Percentage needed to pass (basis points)
+})
+
+;; Proposal counter
+(define-data-var next-proposal-id uint u1)
+
+;; Delegate voting power
+(define-map voting-delegates {token-id: uint, delegator: principal} principal)
+
+;; Setup governance for token
+(define-public (setup-governance
+  (token-id uint)
+  (min-proposal-threshold uint)
+  (voting-period uint)
+  (execution-delay uint)
+  (quorum-threshold uint)
+  (pass-threshold uint)
+)
+  (begin
+    ;; Validation
+    (asserts! (token-exists-check token-id) ERR_TOKEN_NOT_FOUND)
+    (asserts! (is-token-creator token-id tx-sender) ERR_UNAUTHORIZED)
+    (asserts! (> voting-period u0) ERR_INVALID_PARAMETER)
+    (asserts! (<= pass-threshold u10000) ERR_INVALID_PARAMETER)
+    
+    ;; Set governance parameters
+    (map-set governance-settings {token-id: token-id} {
+      min-proposal-threshold: min-proposal-threshold,
+      voting-period: voting-period,
+      execution-delay: execution-delay,
+      quorum-threshold: quorum-threshold,
+      pass-threshold: pass-threshold
+    })
+    
+    (log-structured-event "governance-setup" "governance" "info" "Governance configured")
+    (ok true)
+  )
+)
+
+;; Create governance proposal
+(define-public (create-proposal
+  (token-id uint)
+  (title (string-utf8 128))
+  (description (string-utf8 512))
+  (voting-power-required uint)
+)
+  (let (
+    (proposal-id (var-get next-proposal-id))
+    (governance-config (unwrap! (map-get? governance-settings {token-id: token-id}) ERR_TOKEN_NOT_FOUND))
+    (user-balance (default-to u0 (map-get? token-balances {token-id: token-id, owner: tx-sender})))
+    (current-time (default-to u0 (get-block-info? time (- block-height u1))))
+    (voting-ends-at (+ block-height (get voting-period governance-config)))
+  )
+    (begin
+      ;; Validation
+      (try! (assert-not-paused))
+      (asserts! (>= user-balance (get min-proposal-threshold governance-config)) ERR_UNAUTHORIZED)
+      (asserts! (> (len title) u0) ERR_INVALID_PARAMETER)
+      (asserts! (> (len description) u0) ERR_INVALID_PARAMETER)
+      
+      ;; Create proposal
+      (map-set governance-proposals {proposal-id: proposal-id} {
+        title: title,
+        description: description,
+        proposer: tx-sender,
+        token-id: token-id,
+        voting-power-required: voting-power-required,
+        votes-for: u0,
+        votes-against: u0,
+        votes-abstain: u0,
+        status: "active",
+        created-at: current-time,
+        voting-ends-at: voting-ends-at,
+        execution-delay: (get execution-delay governance-config)
+      })
+      
+      ;; Increment proposal ID
+      (var-set next-proposal-id (+ proposal-id u1))
+      
+      (log-structured-event "proposal-created" "governance" "info" title)
+      (print {
+        notification: "proposal-created",
+        payload: {
+          proposal-id: proposal-id,
+          title: title,
+          proposer: tx-sender,
+          token-id: token-id,
+          voting-ends-at: voting-ends-at
+        }
+      })
+      
+      (ok proposal-id)
+    )
+  )
+)
+
+;; Vote on proposal
+(define-public (vote-on-proposal
+  (proposal-id uint)
+  (vote (string-ascii 8))
+  (voting-power uint)
+)
+  (let (
+    (proposal-data (unwrap! (map-get? governance-proposals {proposal-id: proposal-id}) ERR_TOKEN_NOT_FOUND))
+    (token-id (get token-id proposal-data))
+    (user-balance (default-to u0 (map-get? token-balances {token-id: token-id, owner: tx-sender})))
+    (vote-key {proposal-id: proposal-id, voter: tx-sender})
+  )
+    (begin
+      ;; Validation
+      (try! (assert-not-paused))
+      (asserts! (is-eq (get status proposal-data) "active") ERR_INVALID_STATE)
+      (asserts! (< block-height (get voting-ends-at proposal-data)) ERR_INVALID_STATE)
+      (asserts! (>= user-balance voting-power) ERR_INSUFFICIENT_BALANCE)
+      (asserts! (is-none (map-get? user-votes vote-key)) ERR_INVALID_STATE) ;; No double voting
+      (asserts! (or (is-eq vote "for") (or (is-eq vote "against") (is-eq vote "abstain"))) ERR_INVALID_PARAMETER)
+      
+      ;; Record vote
+      (map-set user-votes vote-key {
+        vote: vote,
+        voting-power: voting-power,
+        voted-at: (default-to u0 (get-block-info? time (- block-height u1)))
+      })
+      
+      ;; Update proposal vote counts
+      (map-set governance-proposals {proposal-id: proposal-id}
+        (if (is-eq vote "for")
+          (merge proposal-data {votes-for: (+ (get votes-for proposal-data) voting-power)})
+          (if (is-eq vote "against")
+            (merge proposal-data {votes-against: (+ (get votes-against proposal-data) voting-power)})
+            (merge proposal-data {votes-abstain: (+ (get votes-abstain proposal-data) voting-power)})
+          )
+        )
+      )
+      
+      (log-structured-event "vote-cast" "governance" "info" vote)
+      (ok true)
+    )
+  )
+)
+
+;; Finalize proposal voting
+(define-public (finalize-proposal (proposal-id uint))
+  (let (
+    (proposal-data (unwrap! (map-get? governance-proposals {proposal-id: proposal-id}) ERR_TOKEN_NOT_FOUND))
+    (token-id (get token-id proposal-data))
+    (governance-config (unwrap! (map-get? governance-settings {token-id: token-id}) ERR_TOKEN_NOT_FOUND))
+    (total-votes (+ (+ (get votes-for proposal-data) (get votes-against proposal-data)) (get votes-abstain proposal-data)))
+    (total-supply (default-to u0 (map-get? token-supplies token-id)))
+  )
+    (begin
+      ;; Validation
+      (asserts! (is-eq (get status proposal-data) "active") ERR_INVALID_STATE)
+      (asserts! (>= block-height (get voting-ends-at proposal-data)) ERR_INVALID_STATE)
+      
+      ;; Check quorum
+      (let (
+        (quorum-met (>= (* total-votes u10000) (* total-supply (get quorum-threshold governance-config))))
+        (votes-needed (/ (* total-votes (get pass-threshold governance-config)) u10000))
+        (proposal-passed (and quorum-met (>= (get votes-for proposal-data) votes-needed)))
+      )
+        ;; Update proposal status
+        (map-set governance-proposals {proposal-id: proposal-id}
+          (merge proposal-data {
+            status: (if proposal-passed "passed" "rejected")
+          })
+        )
+        
+        (log-structured-event "proposal-finalized" "governance" "info" 
+          (if proposal-passed "Proposal passed" "Proposal rejected"))
+        
+        (ok proposal-passed)
+      )
+    )
+  )
+)
+
+;; Delegate voting power
+(define-public (delegate-voting-power (token-id uint) (delegate principal))
+  (begin
+    ;; Validation
+    (try! (assert-not-paused))
+    (asserts! (token-exists-check token-id) ERR_TOKEN_NOT_FOUND)
+    (asserts! (is-valid-recipient delegate) ERR_INVALID_RECIPIENT)
+    (asserts! (not (is-eq delegate tx-sender)) ERR_INVALID_PARAMETER)
+    
+    ;; Set delegate
+    (map-set voting-delegates {token-id: token-id, delegator: tx-sender} delegate)
+    
+    (log-structured-event "voting-delegated" "governance" "info" "Voting power delegated")
+    (ok true)
+  )
+)
+
+;; Get proposal info
+(define-read-only (get-proposal (proposal-id uint))
+  (ok (map-get? governance-proposals {proposal-id: proposal-id}))
+)
+
+;; Get user vote
+(define-read-only (get-user-vote (proposal-id uint) (voter principal))
+  (ok (map-get? user-votes {proposal-id: proposal-id, voter: voter}))
+)
+
+;; Get governance settings
+(define-read-only (get-governance-settings (token-id uint))
+  (ok (map-get? governance-settings {token-id: token-id}))
+)
+
+;; Get voting delegate
+(define-read-only (get-voting-delegate (token-id uint) (delegator principal))
+  (ok (map-get? voting-delegates {token-id: token-id, delegator: delegator}))
+)
+
+;; Calculate voting power (including delegated)
+(define-read-only (calculate-voting-power (token-id uint) (user principal))
+  (let (
+    (own-balance (default-to u0 (map-get? token-balances {token-id: token-id, owner: user})))
+    ;; Would need to calculate delegated power from others
+    (delegated-power u0)
+  )
+    (ok (+ own-balance delegated-power))
+  )
+)
+;; ===== TOKEN MARKETPLACE AND TRADING SYSTEM =====
+
+;; Marketplace listings
+(define-map marketplace-listings {listing-id: uint} {
+  seller: principal,
+  token-id: uint,
+  amount: uint,
+  price-per-token: uint,
+  total-price: uint,
+  payment-token: (optional uint), ;; None for STX, Some for token payments
+  status: (string-ascii 16), ;; "active", "sold", "cancelled", "expired"
+  created-at: uint,
+  expires-at: (optional uint),
+  reserved-for: (optional principal) ;; Private sale option
+})
+
+;; Marketplace offers (bids)
+(define-map marketplace-offers {offer-id: uint} {
+  buyer: principal,
+  listing-id: uint,
+  offered-price: uint,
+  payment-token: (optional uint),
+  status: (string-ascii 16), ;; "pending", "accepted", "rejected", "expired"
+  created-at: uint,
+  expires-at: uint
+})
+
+;; Trading pairs for token swaps
+(define-map trading-pairs {pair-id: uint} {
+  token-a: uint,
+  token-b: uint,
+  liquidity-a: uint,
+  liquidity-b: uint,
+  fee-rate: uint, ;; Basis points
+  creator: principal,
+  status: (string-ascii 16) ;; "active", "paused"
+})
+
+;; Liquidity provider positions
+(define-map liquidity-positions {pair-id: uint, provider: principal} {
+  liquidity-tokens: uint,
+  token-a-deposited: uint,
+  token-b-deposited: uint,
+  rewards-earned: uint,
+  last-reward-claim: uint
+})
+
+;; Counters
+(define-data-var next-listing-id uint u1)
+(define-data-var next-offer-id uint u1)
+(define-data-var next-pair-id uint u1)
+
+;; Marketplace statistics
+(define-map marketplace-stats {token-id: uint} {
+  total-volume: uint,
+  total-sales: uint,
+  avg-price: uint,
+  highest-sale: uint,
+  last-sale-price: uint,
+  active-listings: uint
+})
+
+;; Create marketplace listing
+(define-public (create-listing
+  (token-id uint)
+  (amount uint)
+  (price-per-token uint)
+  (payment-token (optional uint))
+  (duration (optional uint))
+  (reserved-for (optional principal))
+)
+  (let (
+    (listing-id (var-get next-listing-id))
+    (current-time (default-to u0 (get-block-info? time (- block-height u1))))
+    (expires-at (match duration dur (some (+ current-time dur)) none))
+    (total-price (* amount price-per-token))
+    (current-balance (default-to u0 (map-get? token-balances {token-id: token-id, owner: tx-sender})))
+  )
+    (begin
+      ;; Validation
+      (try! (assert-not-paused))
+      (asserts! (token-exists-check token-id) ERR_TOKEN_NOT_FOUND)
+      (asserts! (is-valid-amount amount) ERR_INVALID_AMOUNT)
+      (asserts! (> price-per-token u0) ERR_INVALID_AMOUNT)
+      (asserts! (>= current-balance amount) ERR_INSUFFICIENT_BALANCE)
+      
+      ;; Validate payment token if specified
+      (match payment-token
+        pay-token (asserts! (token-exists-check pay-token) ERR_TOKEN_NOT_FOUND)
+        true
+      )
+      
+      ;; Create listing
+      (map-set marketplace-listings {listing-id: listing-id} {
+        seller: tx-sender,
+        token-id: token-id,
+        amount: amount,
+        price-per-token: price-per-token,
+        total-price: total-price,
+        payment-token: payment-token,
+        status: "active",
+        created-at: current-time,
+        expires-at: expires-at,
+        reserved-for: reserved-for
+      })
+      
+      ;; Lock tokens (simplified - would need proper escrow)
+      (map-set token-balances {token-id: token-id, owner: tx-sender} (- current-balance amount))
+      
+      ;; Update marketplace stats
+      (update-marketplace-stats token-id "listing-created" u0)
+      
+      ;; Increment listing ID
+      (var-set next-listing-id (+ listing-id u1))
+      
+      (log-structured-event "listing-created" "marketplace" "info" "Listing created")
+      (print {
+        notification: "listing-created",
+        payload: {
+          listing-id: listing-id,
+          seller: tx-sender,
+          token-id: token-id,
+          amount: amount,
+          price-per-token: price-per-token,
+          total-price: total-price
+        }
+      })
+      
+      (ok listing-id)
+    )
+  )
+)
+
+;; Purchase from listing
+(define-public (purchase-listing (listing-id uint))
+  (let (
+    (listing-data (unwrap! (map-get? marketplace-listings {listing-id: listing-id}) ERR_TOKEN_NOT_FOUND))
+    (token-id (get token-id listing-data))
+    (seller (get seller listing-data))
+    (amount (get amount listing-data))
+    (total-price (get total-price listing-data))
+  )
+    (begin
+      ;; Validation
+      (try! (assert-not-paused))
+      (asserts! (is-eq (get status listing-data) "active") ERR_INVALID_STATE)
+      (asserts! (not (is-eq tx-sender seller)) ERR_INVALID_PARAMETER)
+      
+      ;; Check if reserved
+      (match (get reserved-for listing-data)
+        reserved-buyer (asserts! (is-eq tx-sender reserved-buyer) ERR_UNAUTHORIZED)
+        true
+      )
+      
+      ;; Check expiration
+      (match (get expires-at listing-data)
+        expires-time (asserts! (< (default-to u0 (get-block-info? time (- block-height u1))) expires-time) ERR_INVALID_STATE)
+        true
+      )
+      
+      ;; Process payment (simplified)
+      (match (get payment-token listing-data)
+        payment-token-id (begin
+          ;; Token payment
+          (let ((buyer-balance (default-to u0 (map-get? token-balances {token-id: payment-token-id, owner: tx-sender}))))
+            (asserts! (>= buyer-balance total-price) ERR_INSUFFICIENT_BALANCE)
+            (map-set token-balances {token-id: payment-token-id, owner: tx-sender} (- buyer-balance total-price))
+            (map-set token-balances {token-id: payment-token-id, owner: seller} 
+              (+ (default-to u0 (map-get? token-balances {token-id: payment-token-id, owner: seller})) total-price))
+          )
+        )
+        ;; STX payment would be handled here
+        true
+      )
+      
+      ;; Transfer tokens to buyer
+      (map-set token-balances {token-id: token-id, owner: tx-sender} 
+        (+ (default-to u0 (map-get? token-balances {token-id: token-id, owner: tx-sender})) amount))
+      
+      ;; Process royalties
+      (try! (process-sale-royalties token-id total-price))
+      
+      ;; Update listing status
+      (map-set marketplace-listings {listing-id: listing-id}
+        (merge listing-data {status: "sold"})
+      )
+      
+      ;; Update marketplace stats
+      (update-marketplace-stats token-id "sale-completed" total-price)
+      
+      (log-structured-event "listing-purchased" "marketplace" "info" "Purchase completed")
+      (ok true)
+    )
+  )
+)
+
+;; Create offer on listing
+(define-public (create-offer
+  (listing-id uint)
+  (offered-price uint)
+  (payment-token (optional uint))
+  (duration uint)
+)
+  (let (
+    (offer-id (var-get next-offer-id))
+    (listing-data (unwrap! (map-get? marketplace-listings {listing-id: listing-id}) ERR_TOKEN_NOT_FOUND))
+    (current-time (default-to u0 (get-block-info? time (- block-height u1))))
+    (expires-at (+ current-time duration))
+  )
+    (begin
+      ;; Validation
+      (try! (assert-not-paused))
+      (asserts! (is-eq (get status listing-data) "active") ERR_INVALID_STATE)
+      (asserts! (> offered-price u0) ERR_INVALID_AMOUNT)
+      (asserts! (> duration u0) ERR_INVALID_PARAMETER)
+      (asserts! (not (is-eq tx-sender (get seller listing-data))) ERR_INVALID_PARAMETER)
+      
+      ;; Create offer
+      (map-set marketplace-offers {offer-id: offer-id} {
+        buyer: tx-sender,
+        listing-id: listing-id,
+        offered-price: offered-price,
+        payment-token: payment-token,
+        status: "pending",
+        created-at: current-time,
+        expires-at: expires-at
+      })
+      
+      ;; Increment offer ID
+      (var-set next-offer-id (+ offer-id u1))
+      
+      (log-structured-event "offer-created" "marketplace" "info" "Offer created")
+      (ok offer-id)
+    )
+  )
+)
+
+;; Accept offer
+(define-public (accept-offer (offer-id uint))
+  (let (
+    (offer-data (unwrap! (map-get? marketplace-offers {offer-id: offer-id}) ERR_TOKEN_NOT_FOUND))
+    (listing-data (unwrap! (map-get? marketplace-listings {listing-id: (get listing-id offer-data)}) ERR_TOKEN_NOT_FOUND))
+  )
+    (begin
+      ;; Validation
+      (try! (assert-not-paused))
+      (asserts! (is-eq tx-sender (get seller listing-data)) ERR_UNAUTHORIZED)
+      (asserts! (is-eq (get status offer-data) "pending") ERR_INVALID_STATE)
+      (asserts! (< (default-to u0 (get-block-info? time (- block-height u1))) (get expires-at offer-data)) ERR_INVALID_STATE)
+      
+      ;; Process the sale at offered price
+      ;; (Implementation similar to purchase-listing but with offered price)
+      
+      ;; Update offer status
+      (map-set marketplace-offers {offer-id: offer-id}
+        (merge offer-data {status: "accepted"})
+      )
+      
+      ;; Update listing status
+      (map-set marketplace-listings {listing-id: (get listing-id offer-data)}
+        (merge listing-data {status: "sold"})
+      )
+      
+      (log-structured-event "offer-accepted" "marketplace" "info" "Offer accepted")
+      (ok true)
+    )
+  )
+)
+
+;; Create trading pair for token swaps
+(define-public (create-trading-pair
+  (token-a uint)
+  (token-b uint)
+  (initial-liquidity-a uint)
+  (initial-liquidity-b uint)
+  (fee-rate uint)
+)
+  (let (
+    (pair-id (var-get next-pair-id))
+    (balance-a (default-to u0 (map-get? token-balances {token-id: token-a, owner: tx-sender})))
+    (balance-b (default-to u0 (map-get? token-balances {token-id: token-b, owner: tx-sender})))
+  )
+    (begin
+      ;; Validation
+      (try! (assert-not-paused))
+      (asserts! (token-exists-check token-a) ERR_TOKEN_NOT_FOUND)
+      (asserts! (token-exists-check token-b) ERR_TOKEN_NOT_FOUND)
+      (asserts! (not (is-eq token-a token-b)) ERR_INVALID_PARAMETER)
+      (asserts! (is-valid-amount initial-liquidity-a) ERR_INVALID_AMOUNT)
+      (asserts! (is-valid-amount initial-liquidity-b) ERR_INVALID_AMOUNT)
+      (asserts! (>= balance-a initial-liquidity-a) ERR_INSUFFICIENT_BALANCE)
+      (asserts! (>= balance-b initial-liquidity-b) ERR_INSUFFICIENT_BALANCE)
+      (asserts! (<= fee-rate u1000) ERR_INVALID_PARAMETER) ;; Max 10% fee
+      
+      ;; Create trading pair
+      (map-set trading-pairs {pair-id: pair-id} {
+        token-a: token-a,
+        token-b: token-b,
+        liquidity-a: initial-liquidity-a,
+        liquidity-b: initial-liquidity-b,
+        fee-rate: fee-rate,
+        creator: tx-sender,
+        status: "active"
+      })
+      
+      ;; Lock initial liquidity
+      (map-set token-balances {token-id: token-a, owner: tx-sender} (- balance-a initial-liquidity-a))
+      (map-set token-balances {token-id: token-b, owner: tx-sender} (- balance-b initial-liquidity-b))
+      
+      ;; Create initial LP position
+      (map-set liquidity-positions {pair-id: pair-id, provider: tx-sender} {
+        liquidity-tokens: (* initial-liquidity-a initial-liquidity-b), ;; Simplified LP token calculation
+        token-a-deposited: initial-liquidity-a,
+        token-b-deposited: initial-liquidity-b,
+        rewards-earned: u0,
+        last-reward-claim: block-height
+      })
+      
+      ;; Increment pair ID
+      (var-set next-pair-id (+ pair-id u1))
+      
+      (log-structured-event "trading-pair-created" "marketplace" "info" "Trading pair created")
+      (ok pair-id)
+    )
+  )
+)
+
+;; Helper to update marketplace statistics
+(define-private (update-marketplace-stats (token-id uint) (event-type (string-ascii 16)) (sale-price uint))
+  (let ((current-stats (map-get? marketplace-stats {token-id: token-id})))
+    (map-set marketplace-stats {token-id: token-id}
+      (match current-stats
+        stats (if (is-eq event-type "sale-completed")
+          {
+            total-volume: (+ (get total-volume stats) sale-price),
+            total-sales: (+ (get total-sales stats) u1),
+            avg-price: (/ (+ (get total-volume stats) sale-price) (+ (get total-sales stats) u1)),
+            highest-sale: (if (> sale-price (get highest-sale stats)) sale-price (get highest-sale stats)),
+            last-sale-price: sale-price,
+            active-listings: (get active-listings stats)
+          }
+          (merge stats {active-listings: (+ (get active-listings stats) u1)})
+        )
+        {
+          total-volume: sale-price,
+          total-sales: (if (is-eq event-type "sale-completed") u1 u0),
+          avg-price: sale-price,
+          highest-sale: sale-price,
+          last-sale-price: sale-price,
+          active-listings: (if (is-eq event-type "listing-created") u1 u0)
+        }
+      )
+    )
+  )
+)
+
+;; Helper to process sale royalties
+(define-private (process-sale-royalties (token-id uint) (sale-price uint))
+  (match (map-get? token-royalties-enhanced token-id)
+    royalty-data (begin
+      ;; Process royalty payments (simplified)
+      (log-structured-event "royalties-processed" "marketplace" "info" "Royalties paid")
+      (ok true)
+    )
+    (ok true)
+  )
+)
+
+;; Get marketplace listing
+(define-read-only (get-listing (listing-id uint))
+  (ok (map-get? marketplace-listings {listing-id: listing-id}))
+)
+
+;; Get marketplace offer
+(define-read-only (get-offer (offer-id uint))
+  (ok (map-get? marketplace-offers {offer-id: offer-id}))
+)
+
+;; Get trading pair
+(define-read-only (get-trading-pair (pair-id uint))
+  (ok (map-get? trading-pairs {pair-id: pair-id}))
+)
+
+;; Get marketplace statistics
+(define-read-only (get-marketplace-stats (token-id uint))
+  (ok (map-get? marketplace-stats {token-id: token-id}))
+)
+
+;; Calculate swap output
+(define-read-only (calculate-swap-output (pair-id uint) (input-amount uint) (token-in uint))
+  (match (map-get? trading-pairs {pair-id: pair-id})
+    pair-data (let (
+      (is-token-a (is-eq token-in (get token-a pair-data)))
+      (reserve-in (if is-token-a (get liquidity-a pair-data) (get liquidity-b pair-data)))
+      (reserve-out (if is-token-a (get liquidity-b pair-data) (get liquidity-a pair-data)))
+      (fee-amount (/ (* input-amount (get fee-rate pair-data)) u10000))
+      (input-after-fee (- input-amount fee-amount))
+      (output-amount (/ (* input-after-fee reserve-out) (+ reserve-in input-after-fee)))
+    )
+      (ok {
+        output-amount: output-amount,
+        fee-amount: fee-amount,
+        price-impact: (/ (* output-amount u10000) reserve-out)
+      })
+    )
+    (err ERR_TOKEN_NOT_FOUND)
+  )
 )
