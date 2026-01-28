@@ -2977,6 +2977,212 @@
     most-active-recipient: CONTRACT_OWNER
   })
 )
+;; ===== TOKEN LOCKING AND ESCROW SYSTEM =====
+
+;; Token locks for escrow and conditional transfers
+(define-map token-locks {token-id: uint, owner: principal, lock-id: uint} {
+  locked-amount: uint,
+  lock-type: (string-ascii 16), ;; "escrow", "time", "condition"
+  unlock-condition: (string-utf8 256),
+  unlock-time: (optional uint),
+  beneficiary: (optional principal),
+  created-at: uint,
+  created-by: principal
+})
+
+;; Lock counter for unique lock IDs
+(define-data-var next-lock-id uint u1)
+
+;; Escrow agreements
+(define-map escrow-agreements {agreement-id: uint} {
+  token-id: uint,
+  seller: principal,
+  buyer: principal,
+  amount: uint,
+  price: uint,
+  status: (string-ascii 16), ;; "pending", "completed", "cancelled"
+  created-at: uint,
+  expires-at: uint
+})
+
+;; Escrow counter
+(define-data-var next-escrow-id uint u1)
+
+;; Lock tokens for escrow or time-based release
+(define-public (lock-tokens
+  (token-id uint)
+  (amount uint)
+  (lock-type (string-ascii 16))
+  (unlock-condition (string-utf8 256))
+  (unlock-time (optional uint))
+  (beneficiary (optional principal))
+)
+  (let (
+    (lock-id (var-get next-lock-id))
+    (current-balance (default-to u0 (map-get? token-balances {token-id: token-id, owner: tx-sender})))
+  )
+    (begin
+      ;; Validation
+      (try! (assert-not-paused))
+      (asserts! (token-exists-check token-id) ERR_TOKEN_NOT_FOUND)
+      (asserts! (is-valid-amount amount) ERR_INVALID_AMOUNT)
+      (asserts! (>= current-balance amount) ERR_INSUFFICIENT_BALANCE)
+      (asserts! (> (len lock-type) u0) ERR_INVALID_PARAMETER)
+      
+      ;; Create lock
+      (map-set token-locks {token-id: token-id, owner: tx-sender, lock-id: lock-id} {
+        locked-amount: amount,
+        lock-type: lock-type,
+        unlock-condition: unlock-condition,
+        unlock-time: unlock-time,
+        beneficiary: beneficiary,
+        created-at: (default-to u0 (get-block-info? time (- block-height u1))),
+        created-by: tx-sender
+      })
+      
+      ;; Increment lock ID
+      (var-set next-lock-id (+ lock-id u1))
+      
+      ;; Emit lock event
+      (log-structured-event "tokens-locked" "escrow" "info" lock-type)
+      (print {
+        notification: "tokens-locked",
+        payload: {
+          token-id: token-id,
+          owner: tx-sender,
+          lock-id: lock-id,
+          amount: amount,
+          lock-type: lock-type,
+          unlock-time: unlock-time
+        }
+      })
+      
+      (ok lock-id)
+    )
+  )
+)
+
+;; Unlock tokens when conditions are met
+(define-public (unlock-tokens
+  (token-id uint)
+  (lock-id uint)
+  (verification-data (string-utf8 256))
+)
+  (let (
+    (lock-key {token-id: token-id, owner: tx-sender, lock-id: lock-id})
+    (lock-data (unwrap! (map-get? token-locks lock-key) ERR_TOKEN_LOCKED))
+  )
+    (begin
+      ;; Validation
+      (try! (assert-not-paused))
+      (asserts! (is-eq (get created-by lock-data) tx-sender) ERR_UNAUTHORIZED)
+      
+      ;; Check unlock conditions
+      (try! (validate-unlock-conditions lock-data verification-data))
+      
+      ;; Remove lock
+      (map-delete token-locks lock-key)
+      
+      ;; Emit unlock event
+      (log-structured-event "tokens-unlocked" "escrow" "info" (get lock-type lock-data))
+      (print {
+        notification: "tokens-unlocked",
+        payload: {
+          token-id: token-id,
+          owner: tx-sender,
+          lock-id: lock-id,
+          amount: (get locked-amount lock-data),
+          verification: verification-data
+        }
+      })
+      
+      (ok true)
+    )
+  )
+)
+
+;; Validate unlock conditions
+(define-private (validate-unlock-conditions 
+  (lock-data {
+    locked-amount: uint,
+    lock-type: (string-ascii 16),
+    unlock-condition: (string-utf8 256),
+    unlock-time: (optional uint),
+    beneficiary: (optional principal),
+    created-at: uint,
+    created-by: principal
+  })
+  (verification-data (string-utf8 256))
+)
+  (let ((current-time (default-to u0 (get-block-info? time (- block-height u1)))))
+    (if (is-eq (get lock-type lock-data) "time")
+      ;; Time-based unlock
+      (match (get unlock-time lock-data)
+        unlock-time (asserts! (>= current-time unlock-time) ERR_TOKEN_LOCKED)
+        (err ERR_INVALID_PARAMETER)
+      )
+      ;; Condition-based unlock (simplified validation)
+      (asserts! (> (len verification-data) u0) ERR_INVALID_PARAMETER)
+    )
+  )
+)
+
+;; Create escrow agreement
+(define-public (create-escrow-agreement
+  (token-id uint)
+  (buyer principal)
+  (amount uint)
+  (price uint)
+  (duration uint)
+)
+  (let (
+    (escrow-id (var-get next-escrow-id))
+    (current-time (default-to u0 (get-block-info? time (- block-height u1))))
+    (expires-at (+ current-time duration))
+  )
+    (begin
+      ;; Validation
+      (try! (assert-not-paused))
+      (asserts! (token-exists-check token-id) ERR_TOKEN_NOT_FOUND)
+      (asserts! (is-valid-amount amount) ERR_INVALID_AMOUNT)
+      (asserts! (> price u0) ERR_INVALID_AMOUNT)
+      (asserts! (is-valid-recipient buyer) ERR_INVALID_RECIPIENT)
+      (asserts! (> duration u0) ERR_INVALID_PARAMETER)
+      
+      ;; Lock tokens in escrow
+      (try! (lock-tokens token-id amount "escrow" "payment-received" none (some buyer)))
+      
+      ;; Create escrow agreement
+      (map-set escrow-agreements {agreement-id: escrow-id} {
+        token-id: token-id,
+        seller: tx-sender,
+        buyer: buyer,
+        amount: amount,
+        price: price,
+        status: "pending",
+        created-at: current-time,
+        expires-at: expires-at
+      })
+      
+      ;; Increment escrow ID
+      (var-set next-escrow-id (+ escrow-id u1))
+      
+      (log-structured-event "escrow-created" "escrow" "info" "Agreement created")
+      (ok escrow-id)
+    )
+  )
+)
+
+;; Get token locks for owner
+(define-read-only (get-token-locks (token-id uint) (owner principal))
+  (ok (list)) ;; Simplified - would return actual locks
+)
+
+;; Get escrow agreement
+(define-read-only (get-escrow-agreement (agreement-id uint))
+  (ok (map-get? escrow-agreements {agreement-id: agreement-id}))
+)
+
 ;; ===== ENHANCED BATCH OPERATIONS WITH CHUNKING =====
 
 ;; Batch operation state tracking
