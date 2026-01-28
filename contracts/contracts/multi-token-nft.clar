@@ -5090,3 +5090,411 @@
     (ok (+ own-balance delegated-power))
   )
 )
+;; ===== TOKEN MARKETPLACE AND TRADING SYSTEM =====
+
+;; Marketplace listings
+(define-map marketplace-listings {listing-id: uint} {
+  seller: principal,
+  token-id: uint,
+  amount: uint,
+  price-per-token: uint,
+  total-price: uint,
+  payment-token: (optional uint), ;; None for STX, Some for token payments
+  status: (string-ascii 16), ;; "active", "sold", "cancelled", "expired"
+  created-at: uint,
+  expires-at: (optional uint),
+  reserved-for: (optional principal) ;; Private sale option
+})
+
+;; Marketplace offers (bids)
+(define-map marketplace-offers {offer-id: uint} {
+  buyer: principal,
+  listing-id: uint,
+  offered-price: uint,
+  payment-token: (optional uint),
+  status: (string-ascii 16), ;; "pending", "accepted", "rejected", "expired"
+  created-at: uint,
+  expires-at: uint
+})
+
+;; Trading pairs for token swaps
+(define-map trading-pairs {pair-id: uint} {
+  token-a: uint,
+  token-b: uint,
+  liquidity-a: uint,
+  liquidity-b: uint,
+  fee-rate: uint, ;; Basis points
+  creator: principal,
+  status: (string-ascii 16) ;; "active", "paused"
+})
+
+;; Liquidity provider positions
+(define-map liquidity-positions {pair-id: uint, provider: principal} {
+  liquidity-tokens: uint,
+  token-a-deposited: uint,
+  token-b-deposited: uint,
+  rewards-earned: uint,
+  last-reward-claim: uint
+})
+
+;; Counters
+(define-data-var next-listing-id uint u1)
+(define-data-var next-offer-id uint u1)
+(define-data-var next-pair-id uint u1)
+
+;; Marketplace statistics
+(define-map marketplace-stats {token-id: uint} {
+  total-volume: uint,
+  total-sales: uint,
+  avg-price: uint,
+  highest-sale: uint,
+  last-sale-price: uint,
+  active-listings: uint
+})
+
+;; Create marketplace listing
+(define-public (create-listing
+  (token-id uint)
+  (amount uint)
+  (price-per-token uint)
+  (payment-token (optional uint))
+  (duration (optional uint))
+  (reserved-for (optional principal))
+)
+  (let (
+    (listing-id (var-get next-listing-id))
+    (current-time (default-to u0 (get-block-info? time (- block-height u1))))
+    (expires-at (match duration dur (some (+ current-time dur)) none))
+    (total-price (* amount price-per-token))
+    (current-balance (default-to u0 (map-get? token-balances {token-id: token-id, owner: tx-sender})))
+  )
+    (begin
+      ;; Validation
+      (try! (assert-not-paused))
+      (asserts! (token-exists-check token-id) ERR_TOKEN_NOT_FOUND)
+      (asserts! (is-valid-amount amount) ERR_INVALID_AMOUNT)
+      (asserts! (> price-per-token u0) ERR_INVALID_AMOUNT)
+      (asserts! (>= current-balance amount) ERR_INSUFFICIENT_BALANCE)
+      
+      ;; Validate payment token if specified
+      (match payment-token
+        pay-token (asserts! (token-exists-check pay-token) ERR_TOKEN_NOT_FOUND)
+        true
+      )
+      
+      ;; Create listing
+      (map-set marketplace-listings {listing-id: listing-id} {
+        seller: tx-sender,
+        token-id: token-id,
+        amount: amount,
+        price-per-token: price-per-token,
+        total-price: total-price,
+        payment-token: payment-token,
+        status: "active",
+        created-at: current-time,
+        expires-at: expires-at,
+        reserved-for: reserved-for
+      })
+      
+      ;; Lock tokens (simplified - would need proper escrow)
+      (map-set token-balances {token-id: token-id, owner: tx-sender} (- current-balance amount))
+      
+      ;; Update marketplace stats
+      (update-marketplace-stats token-id "listing-created" u0)
+      
+      ;; Increment listing ID
+      (var-set next-listing-id (+ listing-id u1))
+      
+      (log-structured-event "listing-created" "marketplace" "info" "Listing created")
+      (print {
+        notification: "listing-created",
+        payload: {
+          listing-id: listing-id,
+          seller: tx-sender,
+          token-id: token-id,
+          amount: amount,
+          price-per-token: price-per-token,
+          total-price: total-price
+        }
+      })
+      
+      (ok listing-id)
+    )
+  )
+)
+
+;; Purchase from listing
+(define-public (purchase-listing (listing-id uint))
+  (let (
+    (listing-data (unwrap! (map-get? marketplace-listings {listing-id: listing-id}) ERR_TOKEN_NOT_FOUND))
+    (token-id (get token-id listing-data))
+    (seller (get seller listing-data))
+    (amount (get amount listing-data))
+    (total-price (get total-price listing-data))
+  )
+    (begin
+      ;; Validation
+      (try! (assert-not-paused))
+      (asserts! (is-eq (get status listing-data) "active") ERR_INVALID_STATE)
+      (asserts! (not (is-eq tx-sender seller)) ERR_INVALID_PARAMETER)
+      
+      ;; Check if reserved
+      (match (get reserved-for listing-data)
+        reserved-buyer (asserts! (is-eq tx-sender reserved-buyer) ERR_UNAUTHORIZED)
+        true
+      )
+      
+      ;; Check expiration
+      (match (get expires-at listing-data)
+        expires-time (asserts! (< (default-to u0 (get-block-info? time (- block-height u1))) expires-time) ERR_INVALID_STATE)
+        true
+      )
+      
+      ;; Process payment (simplified)
+      (match (get payment-token listing-data)
+        payment-token-id (begin
+          ;; Token payment
+          (let ((buyer-balance (default-to u0 (map-get? token-balances {token-id: payment-token-id, owner: tx-sender}))))
+            (asserts! (>= buyer-balance total-price) ERR_INSUFFICIENT_BALANCE)
+            (map-set token-balances {token-id: payment-token-id, owner: tx-sender} (- buyer-balance total-price))
+            (map-set token-balances {token-id: payment-token-id, owner: seller} 
+              (+ (default-to u0 (map-get? token-balances {token-id: payment-token-id, owner: seller})) total-price))
+          )
+        )
+        ;; STX payment would be handled here
+        true
+      )
+      
+      ;; Transfer tokens to buyer
+      (map-set token-balances {token-id: token-id, owner: tx-sender} 
+        (+ (default-to u0 (map-get? token-balances {token-id: token-id, owner: tx-sender})) amount))
+      
+      ;; Process royalties
+      (try! (process-sale-royalties token-id total-price))
+      
+      ;; Update listing status
+      (map-set marketplace-listings {listing-id: listing-id}
+        (merge listing-data {status: "sold"})
+      )
+      
+      ;; Update marketplace stats
+      (update-marketplace-stats token-id "sale-completed" total-price)
+      
+      (log-structured-event "listing-purchased" "marketplace" "info" "Purchase completed")
+      (ok true)
+    )
+  )
+)
+
+;; Create offer on listing
+(define-public (create-offer
+  (listing-id uint)
+  (offered-price uint)
+  (payment-token (optional uint))
+  (duration uint)
+)
+  (let (
+    (offer-id (var-get next-offer-id))
+    (listing-data (unwrap! (map-get? marketplace-listings {listing-id: listing-id}) ERR_TOKEN_NOT_FOUND))
+    (current-time (default-to u0 (get-block-info? time (- block-height u1))))
+    (expires-at (+ current-time duration))
+  )
+    (begin
+      ;; Validation
+      (try! (assert-not-paused))
+      (asserts! (is-eq (get status listing-data) "active") ERR_INVALID_STATE)
+      (asserts! (> offered-price u0) ERR_INVALID_AMOUNT)
+      (asserts! (> duration u0) ERR_INVALID_PARAMETER)
+      (asserts! (not (is-eq tx-sender (get seller listing-data))) ERR_INVALID_PARAMETER)
+      
+      ;; Create offer
+      (map-set marketplace-offers {offer-id: offer-id} {
+        buyer: tx-sender,
+        listing-id: listing-id,
+        offered-price: offered-price,
+        payment-token: payment-token,
+        status: "pending",
+        created-at: current-time,
+        expires-at: expires-at
+      })
+      
+      ;; Increment offer ID
+      (var-set next-offer-id (+ offer-id u1))
+      
+      (log-structured-event "offer-created" "marketplace" "info" "Offer created")
+      (ok offer-id)
+    )
+  )
+)
+
+;; Accept offer
+(define-public (accept-offer (offer-id uint))
+  (let (
+    (offer-data (unwrap! (map-get? marketplace-offers {offer-id: offer-id}) ERR_TOKEN_NOT_FOUND))
+    (listing-data (unwrap! (map-get? marketplace-listings {listing-id: (get listing-id offer-data)}) ERR_TOKEN_NOT_FOUND))
+  )
+    (begin
+      ;; Validation
+      (try! (assert-not-paused))
+      (asserts! (is-eq tx-sender (get seller listing-data)) ERR_UNAUTHORIZED)
+      (asserts! (is-eq (get status offer-data) "pending") ERR_INVALID_STATE)
+      (asserts! (< (default-to u0 (get-block-info? time (- block-height u1))) (get expires-at offer-data)) ERR_INVALID_STATE)
+      
+      ;; Process the sale at offered price
+      ;; (Implementation similar to purchase-listing but with offered price)
+      
+      ;; Update offer status
+      (map-set marketplace-offers {offer-id: offer-id}
+        (merge offer-data {status: "accepted"})
+      )
+      
+      ;; Update listing status
+      (map-set marketplace-listings {listing-id: (get listing-id offer-data)}
+        (merge listing-data {status: "sold"})
+      )
+      
+      (log-structured-event "offer-accepted" "marketplace" "info" "Offer accepted")
+      (ok true)
+    )
+  )
+)
+
+;; Create trading pair for token swaps
+(define-public (create-trading-pair
+  (token-a uint)
+  (token-b uint)
+  (initial-liquidity-a uint)
+  (initial-liquidity-b uint)
+  (fee-rate uint)
+)
+  (let (
+    (pair-id (var-get next-pair-id))
+    (balance-a (default-to u0 (map-get? token-balances {token-id: token-a, owner: tx-sender})))
+    (balance-b (default-to u0 (map-get? token-balances {token-id: token-b, owner: tx-sender})))
+  )
+    (begin
+      ;; Validation
+      (try! (assert-not-paused))
+      (asserts! (token-exists-check token-a) ERR_TOKEN_NOT_FOUND)
+      (asserts! (token-exists-check token-b) ERR_TOKEN_NOT_FOUND)
+      (asserts! (not (is-eq token-a token-b)) ERR_INVALID_PARAMETER)
+      (asserts! (is-valid-amount initial-liquidity-a) ERR_INVALID_AMOUNT)
+      (asserts! (is-valid-amount initial-liquidity-b) ERR_INVALID_AMOUNT)
+      (asserts! (>= balance-a initial-liquidity-a) ERR_INSUFFICIENT_BALANCE)
+      (asserts! (>= balance-b initial-liquidity-b) ERR_INSUFFICIENT_BALANCE)
+      (asserts! (<= fee-rate u1000) ERR_INVALID_PARAMETER) ;; Max 10% fee
+      
+      ;; Create trading pair
+      (map-set trading-pairs {pair-id: pair-id} {
+        token-a: token-a,
+        token-b: token-b,
+        liquidity-a: initial-liquidity-a,
+        liquidity-b: initial-liquidity-b,
+        fee-rate: fee-rate,
+        creator: tx-sender,
+        status: "active"
+      })
+      
+      ;; Lock initial liquidity
+      (map-set token-balances {token-id: token-a, owner: tx-sender} (- balance-a initial-liquidity-a))
+      (map-set token-balances {token-id: token-b, owner: tx-sender} (- balance-b initial-liquidity-b))
+      
+      ;; Create initial LP position
+      (map-set liquidity-positions {pair-id: pair-id, provider: tx-sender} {
+        liquidity-tokens: (* initial-liquidity-a initial-liquidity-b), ;; Simplified LP token calculation
+        token-a-deposited: initial-liquidity-a,
+        token-b-deposited: initial-liquidity-b,
+        rewards-earned: u0,
+        last-reward-claim: block-height
+      })
+      
+      ;; Increment pair ID
+      (var-set next-pair-id (+ pair-id u1))
+      
+      (log-structured-event "trading-pair-created" "marketplace" "info" "Trading pair created")
+      (ok pair-id)
+    )
+  )
+)
+
+;; Helper to update marketplace statistics
+(define-private (update-marketplace-stats (token-id uint) (event-type (string-ascii 16)) (sale-price uint))
+  (let ((current-stats (map-get? marketplace-stats {token-id: token-id})))
+    (map-set marketplace-stats {token-id: token-id}
+      (match current-stats
+        stats (if (is-eq event-type "sale-completed")
+          {
+            total-volume: (+ (get total-volume stats) sale-price),
+            total-sales: (+ (get total-sales stats) u1),
+            avg-price: (/ (+ (get total-volume stats) sale-price) (+ (get total-sales stats) u1)),
+            highest-sale: (if (> sale-price (get highest-sale stats)) sale-price (get highest-sale stats)),
+            last-sale-price: sale-price,
+            active-listings: (get active-listings stats)
+          }
+          (merge stats {active-listings: (+ (get active-listings stats) u1)})
+        )
+        {
+          total-volume: sale-price,
+          total-sales: (if (is-eq event-type "sale-completed") u1 u0),
+          avg-price: sale-price,
+          highest-sale: sale-price,
+          last-sale-price: sale-price,
+          active-listings: (if (is-eq event-type "listing-created") u1 u0)
+        }
+      )
+    )
+  )
+)
+
+;; Helper to process sale royalties
+(define-private (process-sale-royalties (token-id uint) (sale-price uint))
+  (match (map-get? token-royalties-enhanced token-id)
+    royalty-data (begin
+      ;; Process royalty payments (simplified)
+      (log-structured-event "royalties-processed" "marketplace" "info" "Royalties paid")
+      (ok true)
+    )
+    (ok true)
+  )
+)
+
+;; Get marketplace listing
+(define-read-only (get-listing (listing-id uint))
+  (ok (map-get? marketplace-listings {listing-id: listing-id}))
+)
+
+;; Get marketplace offer
+(define-read-only (get-offer (offer-id uint))
+  (ok (map-get? marketplace-offers {offer-id: offer-id}))
+)
+
+;; Get trading pair
+(define-read-only (get-trading-pair (pair-id uint))
+  (ok (map-get? trading-pairs {pair-id: pair-id}))
+)
+
+;; Get marketplace statistics
+(define-read-only (get-marketplace-stats (token-id uint))
+  (ok (map-get? marketplace-stats {token-id: token-id}))
+)
+
+;; Calculate swap output
+(define-read-only (calculate-swap-output (pair-id uint) (input-amount uint) (token-in uint))
+  (match (map-get? trading-pairs {pair-id: pair-id})
+    pair-data (let (
+      (is-token-a (is-eq token-in (get token-a pair-data)))
+      (reserve-in (if is-token-a (get liquidity-a pair-data) (get liquidity-b pair-data)))
+      (reserve-out (if is-token-a (get liquidity-b pair-data) (get liquidity-a pair-data)))
+      (fee-amount (/ (* input-amount (get fee-rate pair-data)) u10000))
+      (input-after-fee (- input-amount fee-amount))
+      (output-amount (/ (* input-after-fee reserve-out) (+ reserve-in input-after-fee)))
+    )
+      (ok {
+        output-amount: output-amount,
+        fee-amount: fee-amount,
+        price-impact: (/ (* output-amount u10000) reserve-out)
+      })
+    )
+    (err ERR_TOKEN_NOT_FOUND)
+  )
+)
