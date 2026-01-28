@@ -335,7 +335,39 @@
                         (+ (get total-bridged current-stats) u1))
       }))))
 
-;; Query functions
+;; Cancel bridge request (for expired or failed requests)
+(define-public (cancel-bridge-request (request-id uint))
+  (let ((request (unwrap! (map-get? bridge-requests request-id) ERR-INVALID-REQUEST)))
+    (begin
+      (asserts! (or (is-eq tx-sender (get owner request)) 
+                    (is-eq tx-sender CONTRACT-OWNER)) ERR-NOT-AUTHORIZED)
+      (asserts! (or (is-eq (get status request) "pending")
+                    (> (- block-height (get created-at request)) (var-get bridge-timeout-blocks))) ERR-INVALID-REQUEST)
+      
+      ;; Update request status
+      (map-set bridge-requests request-id
+        (merge request {status: "cancelled"}))
+      
+      ;; Unlock the token
+      (map-delete locked-tokens (get token-id request))
+      
+      ;; Refund bridge fee if cancelled by owner within grace period
+      (if (and (is-eq tx-sender (get owner request))
+               (< (- block-height (get created-at request)) u6)) ;; 1 hour grace period
+        (let ((chain-config (unwrap-panic (map-get? chain-configs (get target-chain request)))))
+          (try! (stx-transfer? (get bridge-fee chain-config) CONTRACT-OWNER tx-sender)))
+        (ok true))
+      
+      (print {
+        notification: "bridge-request-cancelled",
+        payload: {
+          request-id: request-id,
+          token-id: (get token-id request),
+          cancelled-by: tx-sender
+        }
+      })
+      
+      (ok true))))
 (define-read-only (get-bridge-request (request-id uint))
   (map-get? bridge-requests request-id))
 
