@@ -318,7 +318,7 @@
   ;; Would verify signature against validator consensus
   true) ;; Simplified for demo
 
-(define-private (update-bridge-stats (chain (string-ascii 32)) (success bool))
+(define-private (update-bridge-stats (chain (string-ascii 32)) (success bool) (completion-time uint))
   (let ((current-stats (default-to {
     total-bridged: u0,
     total-volume: u0,
@@ -330,7 +330,9 @@
         total-bridged: (+ (get total-bridged current-stats) u1),
         success-rate: (if success 
           (get success-rate current-stats) 
-          (- (get success-rate current-stats) u1))
+          (- (get success-rate current-stats) u1)),
+        average-time: (/ (+ (* (get average-time current-stats) (get total-bridged current-stats)) completion-time)
+                        (+ (get total-bridged current-stats) u1))
       }))))
 
 ;; Query functions
