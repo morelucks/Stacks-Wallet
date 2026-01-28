@@ -554,3 +554,32 @@
     })
     
     (ok true)))
+;; Bridge request history tracking
+(define-map request-history uint {
+  previous-status: (string-ascii 16),
+  new-status: (string-ascii 16),
+  changed-at: uint,
+  changed-by: principal
+})
+
+;; Update request status with history
+(define-private (update-request-status (request-id uint) (new-status (string-ascii 16)))
+  (let ((request (unwrap-panic (map-get? bridge-requests request-id))))
+    (begin
+      ;; Record history
+      (map-set request-history request-id {
+        previous-status: (get status request),
+        new-status: new-status,
+        changed-at: block-height,
+        changed-by: tx-sender
+      })
+      
+      ;; Update request
+      (map-set bridge-requests request-id
+        (merge request {status: new-status}))
+      
+      (ok true))))
+
+;; Get request history
+(define-read-only (get-request-history (request-id uint))
+  (map-get? request-history request-id))
