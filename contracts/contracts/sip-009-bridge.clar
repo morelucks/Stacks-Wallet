@@ -263,7 +263,8 @@
 (define-public (complete-bridge-request 
   (request-id uint)
   (target-tx-hash (string-ascii 64)))
-  (let ((request (unwrap! (map-get? bridge-requests request-id) ERR-INVALID-REQUEST)))
+  (let ((request (unwrap! (map-get? bridge-requests request-id) ERR-INVALID-REQUEST))
+        (completion-time (- block-height (get created-at request))))
     (begin
       (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED) ;; Would be oracle/validator
       (asserts! (is-eq (get status request) "confirmed") ERR-INVALID-REQUEST)
@@ -271,15 +272,16 @@
       (map-set bridge-requests request-id
         (merge request {status: "completed"}))
       
-      ;; Update bridge statistics
-      (update-bridge-stats (get target-chain request) true)
+      ;; Update bridge statistics with completion time
+      (update-bridge-stats (get target-chain request) true completion-time)
       
       (print {
         notification: "bridge-request-completed",
         payload: {
           request-id: request-id,
           token-id: (get token-id request),
-          target-tx-hash: target-tx-hash
+          target-tx-hash: target-tx-hash,
+          completion-time: completion-time
         }
       })
       
