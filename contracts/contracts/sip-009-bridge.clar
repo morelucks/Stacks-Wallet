@@ -508,3 +508,49 @@
       arbitrum: arbitrum-stats,
       optimism: optimism-stats
     }))
+
+;; Pause/unpause specific chain
+(define-public (set-chain-status (chain (string-ascii 32)) (active bool))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+    (let ((current-config (unwrap! (map-get? chain-configs chain) ERR-INVALID-CHAIN)))
+      (map-set chain-configs chain
+        (merge current-config {active: active}))
+      
+      (print {
+        notification: "chain-status-updated",
+        payload: {
+          chain: chain,
+          active: active,
+          updated-by: tx-sender
+        }
+      })
+      
+      (ok true))))
+
+;; Bulk validator operations
+(define-public (bulk-add-validators (validators (list 10 principal)))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+    (fold add-single-validator validators (ok true))))
+
+(define-private (add-single-validator (validator principal) (acc (response bool uint)))
+  (match acc
+    success (add-validator validator)
+    error (err error)))
+
+;; Emergency pause all bridges
+(define-public (emergency-pause)
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+    (var-set bridge-enabled false)
+    
+    (print {
+      notification: "emergency-pause-activated",
+      payload: {
+        paused-by: tx-sender,
+        timestamp: block-height
+      }
+    })
+    
+    (ok true)))
