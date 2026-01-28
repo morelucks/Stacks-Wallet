@@ -232,7 +232,34 @@
       
       (ok true))))
 
-;; Complete bridge (called when token is minted on target chain)
+;; Batch bridge operations
+(define-public (batch-initiate-bridge-requests 
+  (requests (list 10 {token-id: uint, target-chain: (string-ascii 32), target-address: (string-ascii 64)})))
+  (let ((total-fee (fold calculate-batch-fee requests u0)))
+    (begin
+      (asserts! (>= (stx-get-balance tx-sender) total-fee) ERR-INSUFFICIENT-BALANCE)
+      (try! (stx-transfer? total-fee tx-sender CONTRACT-OWNER))
+      
+      (fold process-batch-request requests (ok (list)))
+    )))
+
+(define-private (calculate-batch-fee 
+  (request {token-id: uint, target-chain: (string-ascii 32), target-address: (string-ascii 64)})
+  (acc uint))
+  (let ((chain-config (unwrap-panic (map-get? chain-configs (get target-chain request)))))
+    (+ acc (get bridge-fee chain-config))))
+
+(define-private (process-batch-request 
+  (request {token-id: uint, target-chain: (string-ascii 32), target-address: (string-ascii 64)})
+  (acc (response (list 10 uint) uint)))
+  (match acc
+    success-list (match (initiate-bridge-request 
+                          (get token-id request) 
+                          (get target-chain request) 
+                          (get target-address request))
+                   request-id (ok (unwrap-panic (as-max-len? (append success-list request-id) u10)))
+                   error (err error))
+    error (err error)))
 (define-public (complete-bridge-request 
   (request-id uint)
   (target-tx-hash (string-ascii 64)))
