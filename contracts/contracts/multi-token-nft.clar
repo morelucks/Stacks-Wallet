@@ -4566,3 +4566,271 @@
     last-health-check: (default-to u0 (get-block-info? time (- block-height u1)))
   })
 )
+
+;; ===== TOKEN STAKING AND REWARDS SYSTEM =====
+
+;; Staking pools
+(define-map staking-pools {pool-id: uint} {
+  token-id: uint,
+  reward-token-id: uint,
+  reward-rate: uint, ;; Rewards per block per staked token
+  total-staked: uint,
+  pool-creator: principal,
+  start-block: uint,
+  end-block: (optional uint),
+  status: (string-ascii 16) ;; "active", "paused", "ended"
+})
+
+;; User stakes
+(define-map user-stakes {pool-id: uint, user: principal} {
+  staked-amount: uint,
+  reward-debt: uint,
+  last-claim-block: uint,
+  stake-time: uint
+})
+
+;; Pool counter
+(define-data-var next-pool-id uint u1)
+
+;; Staking statistics
+(define-map staking-stats {pool-id: uint} {
+  total-rewards-distributed: uint,
+  unique-stakers: uint,
+  avg-stake-duration: uint,
+  last-reward-distribution: uint
+})
+
+;; Create staking pool
+(define-public (create-staking-pool
+  (token-id uint)
+  (reward-token-id uint)
+  (reward-rate uint)
+  (duration-blocks uint)
+)
+  (let (
+    (pool-id (var-get next-pool-id))
+    (current-block block-height)
+    (end-block (if (> duration-blocks u0) (some (+ current-block duration-blocks)) none))
+  )
+    (begin
+      ;; Validation
+      (try! (assert-not-paused))
+      (asserts! (token-exists-check token-id) ERR_TOKEN_NOT_FOUND)
+      (asserts! (token-exists-check reward-token-id) ERR_TOKEN_NOT_FOUND)
+      (asserts! (> reward-rate u0) ERR_INVALID_AMOUNT)
+      (asserts! (is-token-creator reward-token-id tx-sender) ERR_UNAUTHORIZED)
+      
+      ;; Create pool
+      (map-set staking-pools {pool-id: pool-id} {
+        token-id: token-id,
+        reward-token-id: reward-token-id,
+        reward-rate: reward-rate,
+        total-staked: u0,
+        pool-creator: tx-sender,
+        start-block: current-block,
+        end-block: end-block,
+        status: "active"
+      })
+      
+      ;; Initialize stats
+      (map-set staking-stats {pool-id: pool-id} {
+        total-rewards-distributed: u0,
+        unique-stakers: u0,
+        avg-stake-duration: u0,
+        last-reward-distribution: current-block
+      })
+      
+      ;; Increment pool ID
+      (var-set next-pool-id (+ pool-id u1))
+      
+      (log-structured-event "staking-pool-created" "staking" "info" "Pool created")
+      (print {
+        notification: "staking-pool-created",
+        payload: {
+          pool-id: pool-id,
+          token-id: token-id,
+          reward-token-id: reward-token-id,
+          reward-rate: reward-rate,
+          creator: tx-sender
+        }
+      })
+      
+      (ok pool-id)
+    )
+  )
+)
+
+;; Stake tokens in pool
+(define-public (stake-tokens (pool-id uint) (amount uint))
+  (let (
+    (pool-data (unwrap! (map-get? staking-pools {pool-id: pool-id}) ERR_TOKEN_NOT_FOUND))
+    (token-id (get token-id pool-data))
+    (current-balance (default-to u0 (map-get? token-balances {token-id: token-id, owner: tx-sender})))
+    (stake-key {pool-id: pool-id, user: tx-sender})
+    (existing-stake (map-get? user-stakes stake-key))
+  )
+    (begin
+      ;; Validation
+      (try! (assert-not-paused))
+      (asserts! (is-eq (get status pool-data) "active") ERR_INVALID_STATE)
+      (asserts! (is-valid-amount amount) ERR_INVALID_AMOUNT)
+      (asserts! (>= current-balance amount) ERR_INSUFFICIENT_BALANCE)
+      
+      ;; Check pool hasn't ended
+      (match (get end-block pool-data)
+        end-block (asserts! (< block-height end-block) ERR_INVALID_STATE)
+        true
+      )
+      
+      ;; Claim pending rewards first
+      (match existing-stake
+        stake-data (try! (claim-staking-rewards pool-id))
+        true
+      )
+      
+      ;; Update stake
+      (map-set user-stakes stake-key
+        (match existing-stake
+          stake-data {
+            staked-amount: (+ (get staked-amount stake-data) amount),
+            reward-debt: u0, ;; Reset after claiming
+            last-claim-block: block-height,
+            stake-time: (get stake-time stake-data)
+          }
+          {
+            staked-amount: amount,
+            reward-debt: u0,
+            last-claim-block: block-height,
+            stake-time: (default-to u0 (get-block-info? time (- block-height u1)))
+          }
+        )
+      )
+      
+      ;; Update pool total
+      (map-set staking-pools {pool-id: pool-id}
+        (merge pool-data {total-staked: (+ (get total-staked pool-data) amount)})
+      )
+      
+      ;; Transfer tokens (simplified - would need actual transfer)
+      (map-set token-balances {token-id: token-id, owner: tx-sender} (- current-balance amount))
+      
+      (log-structured-event "tokens-staked" "staking" "info" "Tokens staked")
+      (ok true)
+    )
+  )
+)
+
+;; Claim staking rewards
+(define-public (claim-staking-rewards (pool-id uint))
+  (let (
+    (pool-data (unwrap! (map-get? staking-pools {pool-id: pool-id}) ERR_TOKEN_NOT_FOUND))
+    (stake-key {pool-id: pool-id, user: tx-sender})
+    (stake-data (unwrap! (map-get? user-stakes stake-key) ERR_TOKEN_NOT_FOUND))
+    (blocks-staked (- block-height (get last-claim-block stake-data)))
+    (reward-amount (* (* (get staked-amount stake-data) (get reward-rate pool-data)) blocks-staked))
+  )
+    (begin
+      ;; Validation
+      (try! (assert-not-paused))
+      (asserts! (> reward-amount u0) ERR_INVALID_AMOUNT)
+      
+      ;; Mint rewards (simplified)
+      (try! (mint tx-sender (get reward-token-id pool-data) reward-amount))
+      
+      ;; Update stake data
+      (map-set user-stakes stake-key
+        (merge stake-data {
+          reward-debt: (+ (get reward-debt stake-data) reward-amount),
+          last-claim-block: block-height
+        })
+      )
+      
+      ;; Update stats
+      (let ((stats-data (unwrap-panic (map-get? staking-stats {pool-id: pool-id}))))
+        (map-set staking-stats {pool-id: pool-id}
+          (merge stats-data {
+            total-rewards-distributed: (+ (get total-rewards-distributed stats-data) reward-amount),
+            last-reward-distribution: block-height
+          })
+        )
+      )
+      
+      (log-structured-event "rewards-claimed" "staking" "info" "Rewards claimed")
+      (ok reward-amount)
+    )
+  )
+)
+
+;; Unstake tokens
+(define-public (unstake-tokens (pool-id uint) (amount uint))
+  (let (
+    (pool-data (unwrap! (map-get? staking-pools {pool-id: pool-id}) ERR_TOKEN_NOT_FOUND))
+    (stake-key {pool-id: pool-id, user: tx-sender})
+    (stake-data (unwrap! (map-get? user-stakes stake-key) ERR_TOKEN_NOT_FOUND))
+    (token-id (get token-id pool-data))
+  )
+    (begin
+      ;; Validation
+      (try! (assert-not-paused))
+      (asserts! (is-valid-amount amount) ERR_INVALID_AMOUNT)
+      (asserts! (>= (get staked-amount stake-data) amount) ERR_INSUFFICIENT_BALANCE)
+      
+      ;; Claim pending rewards first
+      (try! (claim-staking-rewards pool-id))
+      
+      ;; Update stake
+      (let ((new-staked-amount (- (get staked-amount stake-data) amount)))
+        (if (is-eq new-staked-amount u0)
+          (map-delete user-stakes stake-key)
+          (map-set user-stakes stake-key
+            (merge stake-data {staked-amount: new-staked-amount})
+          )
+        )
+      )
+      
+      ;; Update pool total
+      (map-set staking-pools {pool-id: pool-id}
+        (merge pool-data {total-staked: (- (get total-staked pool-data) amount)})
+      )
+      
+      ;; Return tokens (simplified)
+      (let ((current-balance (default-to u0 (map-get? token-balances {token-id: token-id, owner: tx-sender}))))
+        (map-set token-balances {token-id: token-id, owner: tx-sender} (+ current-balance amount))
+      )
+      
+      (log-structured-event "tokens-unstaked" "staking" "info" "Tokens unstaked")
+      (ok true)
+    )
+  )
+)
+
+;; Get staking pool info
+(define-read-only (get-staking-pool (pool-id uint))
+  (ok (map-get? staking-pools {pool-id: pool-id}))
+)
+
+;; Get user stake info
+(define-read-only (get-user-stake (pool-id uint) (user principal))
+  (ok (map-get? user-stakes {pool-id: pool-id, user: user}))
+)
+
+;; Calculate pending rewards
+(define-read-only (calculate-pending-rewards (pool-id uint) (user principal))
+  (match (map-get? staking-pools {pool-id: pool-id})
+    pool-data (match (map-get? user-stakes {pool-id: pool-id, user: user})
+      stake-data (let (
+        (blocks-since-claim (- block-height (get last-claim-block stake-data)))
+        (reward-amount (* (* (get staked-amount stake-data) (get reward-rate pool-data)) blocks-since-claim))
+      )
+        (ok reward-amount)
+      )
+      (ok u0)
+    )
+    (ok u0)
+  )
+)
+
+;; Get staking statistics
+(define-read-only (get-staking-stats (pool-id uint))
+  (ok (map-get? staking-stats {pool-id: pool-id}))
+)
