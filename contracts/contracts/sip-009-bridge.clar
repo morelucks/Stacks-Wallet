@@ -485,5 +485,26 @@
     enabled: (var-get bridge-enabled),
     total-requests: (- (var-get next-bridge-request-id) u1),
     min-validator-signatures: (var-get min-validator-signatures),
-    supported-chains: (list "ethereum" "polygon")
+    bridge-timeout-blocks: (var-get bridge-timeout-blocks),
+    max-bridge-amount: (var-get max-bridge-amount),
+    supported-chains: (list "ethereum" "polygon" "arbitrum" "optimism")
   })
+
+;; Get comprehensive bridge analytics
+(define-read-only (get-bridge-analytics)
+  (let ((ethereum-stats (default-to {total-bridged: u0, total-volume: u0, success-rate: u100, average-time: u0} 
+                                   (map-get? bridge-stats "ethereum")))
+        (polygon-stats (default-to {total-bridged: u0, total-volume: u0, success-rate: u100, average-time: u0} 
+                                  (map-get? bridge-stats "polygon")))
+        (arbitrum-stats (default-to {total-bridged: u0, total-volume: u0, success-rate: u100, average-time: u0} 
+                                   (map-get? bridge-stats "arbitrum")))
+        (optimism-stats (default-to {total-bridged: u0, total-volume: u0, success-rate: u100, average-time: u0} 
+                                   (map-get? bridge-stats "optimism"))))
+    {
+      total-bridges: (+ (+ (get total-bridged ethereum-stats) (get total-bridged polygon-stats))
+                       (+ (get total-bridged arbitrum-stats) (get total-bridged optimism-stats))),
+      ethereum: ethereum-stats,
+      polygon: polygon-stats,
+      arbitrum: arbitrum-stats,
+      optimism: optimism-stats
+    }))
