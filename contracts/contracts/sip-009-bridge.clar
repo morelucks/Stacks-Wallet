@@ -50,6 +50,9 @@
 (define-constant ERR-INSUFFICIENT-VALIDATORS (err u404))
 (define-constant ERR-BRIDGE-DISABLED (err u405))
 (define-constant ERR-INVALID-REQUEST (err u406))
+(define-constant ERR-INSUFFICIENT-BALANCE (err u407))
+(define-constant ERR-INVALID-SIGNATURE (err u408))
+(define-constant ERR-REQUEST-EXPIRED (err u409))
 
 ;; Data variables
 (define-data-var next-bridge-request-id uint u1)
