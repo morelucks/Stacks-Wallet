@@ -386,6 +386,28 @@
 (define-read-only (is-token-locked (token-id uint))
   (is-some (map-get? locked-tokens token-id)))
 
+;; Get pending requests for a user
+(define-read-only (get-user-pending-requests (user principal))
+  (filter is-user-pending-request (list u1 u2 u3 u4 u5 u6 u7 u8 u9 u10)))
+
+(define-private (is-user-pending-request (request-id uint))
+  (match (map-get? bridge-requests request-id)
+    request (and (is-eq (get owner request) user)
+                 (is-eq (get status request) "pending"))
+    false))
+
+;; Get validator performance metrics
+(define-read-only (get-validator-metrics (validator principal))
+  (match (map-get? bridge-validators validator)
+    validator-info (some {
+      active: (get active validator-info),
+      total-validations: (get total-validations validator-info),
+      reputation-score: (get reputation-score validator-info),
+      success-rate: (/ (* (get reputation-score validator-info) u100) 
+                      (max (get total-validations validator-info) u1))
+    })
+    none))
+
 ;; Administrative functions
 (define-public (set-bridge-enabled (enabled bool))
   (begin
