@@ -62,7 +62,6 @@
 (define-data-var max-bridge-amount uint u1000000000) ;; 1000 STX max
 (define-data-var bridge-timeout-blocks uint u144) ;; ~24 hours
 
-;; Initialize supported chains
 (map-set chain-configs "ethereum" {
   active: true,
   min-confirmations: u12,
@@ -74,6 +73,20 @@
   active: true,
   min-confirmations: u20,
   bridge-fee: u500000, ;; 0.5 STX
+  supported-standards: (list "ERC721" "ERC1155")
+})
+
+(map-set chain-configs "arbitrum" {
+  active: true,
+  min-confirmations: u8,
+  bridge-fee: u750000, ;; 0.75 STX
+  supported-standards: (list "ERC721" "ERC1155")
+})
+
+(map-set chain-configs "optimism" {
+  active: true,
+  min-confirmations: u10,
+  bridge-fee: u600000, ;; 0.6 STX
   supported-standards: (list "ERC721" "ERC1155")
 })
 
