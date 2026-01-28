@@ -583,3 +583,43 @@
 ;; Get request history
 (define-read-only (get-request-history (request-id uint))
   (map-get? request-history request-id))
+;; Bridge fee discount system
+(define-map user-discounts principal {
+  discount-percentage: uint,
+  valid-until: uint,
+  granted-by: principal
+})
+
+;; Grant discount to user
+(define-public (grant-user-discount 
+  (user principal) 
+  (discount-percentage uint) 
+  (valid-blocks uint))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+    (asserts! (<= discount-percentage u50) ERR-INVALID-REQUEST) ;; Max 50% discount
+    
+    (map-set user-discounts user {
+      discount-percentage: discount-percentage,
+      valid-until: (+ block-height valid-blocks),
+      granted-by: tx-sender
+    })
+    
+    (print {
+      notification: "discount-granted",
+      payload: {
+        user: user,
+        discount: discount-percentage,
+        valid-until: (+ block-height valid-blocks)
+      }
+    })
+    
+    (ok true)))
+
+;; Calculate discounted fee
+(define-private (calculate-bridge-fee (user principal) (base-fee uint))
+  (match (map-get? user-discounts user)
+    discount-info (if (> (get valid-until discount-info) block-height)
+                    (- base-fee (/ (* base-fee (get discount-percentage discount-info)) u100))
+                    base-fee)
+    base-fee))
