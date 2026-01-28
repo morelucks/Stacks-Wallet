@@ -50,14 +50,18 @@
 (define-constant ERR-INSUFFICIENT-VALIDATORS (err u404))
 (define-constant ERR-BRIDGE-DISABLED (err u405))
 (define-constant ERR-INVALID-REQUEST (err u406))
+(define-constant ERR-INSUFFICIENT-BALANCE (err u407))
+(define-constant ERR-INVALID-SIGNATURE (err u408))
+(define-constant ERR-REQUEST-EXPIRED (err u409))
 
 ;; Data variables
 (define-data-var next-bridge-request-id uint u1)
 (define-data-var bridge-enabled bool true)
 (define-data-var min-validator-signatures uint u3)
 (define-data-var bridge-fee-percentage uint u100) ;; 1%
+(define-data-var max-bridge-amount uint u1000000000) ;; 1000 STX max
+(define-data-var bridge-timeout-blocks uint u144) ;; ~24 hours
 
-;; Initialize supported chains
 (map-set chain-configs "ethereum" {
   active: true,
   min-confirmations: u12,
@@ -72,19 +76,38 @@
   supported-standards: (list "ERC721" "ERC1155")
 })
 
+(map-set chain-configs "arbitrum" {
+  active: true,
+  min-confirmations: u8,
+  bridge-fee: u750000, ;; 0.75 STX
+  supported-standards: (list "ERC721" "ERC1155")
+})
+
+(map-set chain-configs "optimism" {
+  active: true,
+  min-confirmations: u10,
+  bridge-fee: u600000, ;; 0.6 STX
+  supported-standards: (list "ERC721" "ERC1155")
+})
+
 ;; Bridge request functions
 (define-public (initiate-bridge-request 
   (token-id uint)
   (target-chain (string-ascii 32))
   (target-address (string-ascii 64)))
   (let ((request-id (var-get next-bridge-request-id))
-        (chain-config (unwrap! (map-get? chain-configs target-chain) ERR-INVALID-CHAIN)))
+        (chain-config (unwrap! (map-get? chain-configs target-chain) ERR-INVALID-CHAIN))
+        (bridge-fee (get bridge-fee chain-config)))
     (begin
       (asserts! (var-get bridge-enabled) ERR-BRIDGE-DISABLED)
       (asserts! (get active chain-config) ERR-INVALID-CHAIN)
+      (asserts! (>= (stx-get-balance tx-sender) bridge-fee) ERR-INSUFFICIENT-BALANCE)
       
       ;; Verify token ownership (would integrate with main NFT contract)
       (asserts! (is-token-owner token-id tx-sender) ERR-NOT-AUTHORIZED)
+      
+      ;; Charge bridge fee
+      (try! (stx-transfer? bridge-fee tx-sender CONTRACT-OWNER))
       
       ;; Lock the token
       (try! (lock-token token-id request-id))
@@ -110,7 +133,8 @@
           token-id: token-id,
           target-chain: target-chain,
           target-address: target-address,
-          owner: tx-sender
+          owner: tx-sender,
+          fee-paid: bridge-fee
         }
       })
       
@@ -163,6 +187,10 @@
     (begin
       (asserts! (get active validator-info) ERR-NOT-AUTHORIZED)
       (asserts! (is-eq (get status request) "pending") ERR-INVALID-REQUEST)
+      (asserts! (< (- block-height (get created-at request)) (var-get bridge-timeout-blocks)) ERR-REQUEST-EXPIRED)
+      
+      ;; Verify signature format
+      (asserts! (is-eq (len signature) u65) ERR-INVALID-SIGNATURE)
       
       ;; Add validator signature
       (let ((current-signatures (get validator-signatures request)))
@@ -174,7 +202,8 @@
         ;; Update validator stats
         (map-set bridge-validators tx-sender
           (merge validator-info {
-            total-validations: (+ (get total-validations validator-info) u1)
+            total-validations: (+ (get total-validations validator-info) u1),
+            reputation-score: (+ (get reputation-score validator-info) u1)
           }))
         
         ;; Check if we have enough signatures
@@ -203,11 +232,39 @@
       
       (ok true))))
 
-;; Complete bridge (called when token is minted on target chain)
+;; Batch bridge operations
+(define-public (batch-initiate-bridge-requests 
+  (requests (list 10 {token-id: uint, target-chain: (string-ascii 32), target-address: (string-ascii 64)})))
+  (let ((total-fee (fold calculate-batch-fee requests u0)))
+    (begin
+      (asserts! (>= (stx-get-balance tx-sender) total-fee) ERR-INSUFFICIENT-BALANCE)
+      (try! (stx-transfer? total-fee tx-sender CONTRACT-OWNER))
+      
+      (fold process-batch-request requests (ok (list)))
+    )))
+
+(define-private (calculate-batch-fee 
+  (request {token-id: uint, target-chain: (string-ascii 32), target-address: (string-ascii 64)})
+  (acc uint))
+  (let ((chain-config (unwrap-panic (map-get? chain-configs (get target-chain request)))))
+    (+ acc (get bridge-fee chain-config))))
+
+(define-private (process-batch-request 
+  (request {token-id: uint, target-chain: (string-ascii 32), target-address: (string-ascii 64)})
+  (acc (response (list 10 uint) uint)))
+  (match acc
+    success-list (match (initiate-bridge-request 
+                          (get token-id request) 
+                          (get target-chain request) 
+                          (get target-address request))
+                   request-id (ok (unwrap-panic (as-max-len? (append success-list request-id) u10)))
+                   error (err error))
+    error (err error)))
 (define-public (complete-bridge-request 
   (request-id uint)
   (target-tx-hash (string-ascii 64)))
-  (let ((request (unwrap! (map-get? bridge-requests request-id) ERR-INVALID-REQUEST)))
+  (let ((request (unwrap! (map-get? bridge-requests request-id) ERR-INVALID-REQUEST))
+        (completion-time (- block-height (get created-at request))))
     (begin
       (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED) ;; Would be oracle/validator
       (asserts! (is-eq (get status request) "confirmed") ERR-INVALID-REQUEST)
@@ -215,15 +272,16 @@
       (map-set bridge-requests request-id
         (merge request {status: "completed"}))
       
-      ;; Update bridge statistics
-      (update-bridge-stats (get target-chain request) true)
+      ;; Update bridge statistics with completion time
+      (update-bridge-stats (get target-chain request) true completion-time)
       
       (print {
         notification: "bridge-request-completed",
         payload: {
           request-id: request-id,
           token-id: (get token-id request),
-          target-tx-hash: target-tx-hash
+          target-tx-hash: target-tx-hash,
+          completion-time: completion-time
         }
       })
       
@@ -260,7 +318,7 @@
   ;; Would verify signature against validator consensus
   true) ;; Simplified for demo
 
-(define-private (update-bridge-stats (chain (string-ascii 32)) (success bool))
+(define-private (update-bridge-stats (chain (string-ascii 32)) (success bool) (completion-time uint))
   (let ((current-stats (default-to {
     total-bridged: u0,
     total-volume: u0,
@@ -272,10 +330,44 @@
         total-bridged: (+ (get total-bridged current-stats) u1),
         success-rate: (if success 
           (get success-rate current-stats) 
-          (- (get success-rate current-stats) u1))
+          (- (get success-rate current-stats) u1)),
+        average-time: (/ (+ (* (get average-time current-stats) (get total-bridged current-stats)) completion-time)
+                        (+ (get total-bridged current-stats) u1))
       }))))
 
-;; Query functions
+;; Cancel bridge request (for expired or failed requests)
+(define-public (cancel-bridge-request (request-id uint))
+  (let ((request (unwrap! (map-get? bridge-requests request-id) ERR-INVALID-REQUEST)))
+    (begin
+      (asserts! (or (is-eq tx-sender (get owner request)) 
+                    (is-eq tx-sender CONTRACT-OWNER)) ERR-NOT-AUTHORIZED)
+      (asserts! (or (is-eq (get status request) "pending")
+                    (> (- block-height (get created-at request)) (var-get bridge-timeout-blocks))) ERR-INVALID-REQUEST)
+      
+      ;; Update request status
+      (map-set bridge-requests request-id
+        (merge request {status: "cancelled"}))
+      
+      ;; Unlock the token
+      (map-delete locked-tokens (get token-id request))
+      
+      ;; Refund bridge fee if cancelled by owner within grace period
+      (if (and (is-eq tx-sender (get owner request))
+               (< (- block-height (get created-at request)) u6)) ;; 1 hour grace period
+        (let ((chain-config (unwrap-panic (map-get? chain-configs (get target-chain request)))))
+          (try! (stx-transfer? (get bridge-fee chain-config) CONTRACT-OWNER tx-sender)))
+        (ok true))
+      
+      (print {
+        notification: "bridge-request-cancelled",
+        payload: {
+          request-id: request-id,
+          token-id: (get token-id request),
+          cancelled-by: tx-sender
+        }
+      })
+      
+      (ok true))))
 (define-read-only (get-bridge-request (request-id uint))
   (map-get? bridge-requests request-id))
 
@@ -293,6 +385,28 @@
 
 (define-read-only (is-token-locked (token-id uint))
   (is-some (map-get? locked-tokens token-id)))
+
+;; Get pending requests for a user
+(define-read-only (get-user-pending-requests (user principal))
+  (filter is-user-pending-request (list u1 u2 u3 u4 u5 u6 u7 u8 u9 u10)))
+
+(define-private (is-user-pending-request (request-id uint))
+  (match (map-get? bridge-requests request-id)
+    request (and (is-eq (get owner request) user)
+                 (is-eq (get status request) "pending"))
+    false))
+
+;; Get validator performance metrics
+(define-read-only (get-validator-metrics (validator principal))
+  (match (map-get? bridge-validators validator)
+    validator-info (some {
+      active: (get active validator-info),
+      total-validations: (get total-validations validator-info),
+      reputation-score: (get reputation-score validator-info),
+      success-rate: (/ (* (get reputation-score validator-info) u100) 
+                      (max (get total-validations validator-info) u1))
+    })
+    none))
 
 ;; Administrative functions
 (define-public (set-bridge-enabled (enabled bool))
@@ -321,7 +435,32 @@
 (define-public (set-min-validator-signatures (min-sigs uint))
   (begin
     (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+    (asserts! (and (>= min-sigs u1) (<= min-sigs u10)) ERR-INVALID-REQUEST)
     (var-set min-validator-signatures min-sigs)
+    (ok true)))
+
+;; Set bridge timeout
+(define-public (set-bridge-timeout (timeout-blocks uint))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+    (asserts! (and (>= timeout-blocks u6) (<= timeout-blocks u1008)) ERR-INVALID-REQUEST) ;; 1 hour to 1 week
+    (var-set bridge-timeout-blocks timeout-blocks)
+    (ok true)))
+
+;; Remove inactive validator
+(define-public (remove-validator (validator principal))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+    (map-delete bridge-validators validator)
+    
+    (print {
+      notification: "validator-removed",
+      payload: {
+        validator: validator,
+        removed-by: tx-sender
+      }
+    })
+    
     (ok true)))
 
 ;; Emergency functions
@@ -346,5 +485,141 @@
     enabled: (var-get bridge-enabled),
     total-requests: (- (var-get next-bridge-request-id) u1),
     min-validator-signatures: (var-get min-validator-signatures),
-    supported-chains: (list "ethereum" "polygon")
+    bridge-timeout-blocks: (var-get bridge-timeout-blocks),
+    max-bridge-amount: (var-get max-bridge-amount),
+    supported-chains: (list "ethereum" "polygon" "arbitrum" "optimism")
   })
+
+;; Get comprehensive bridge analytics
+(define-read-only (get-bridge-analytics)
+  (let ((ethereum-stats (default-to {total-bridged: u0, total-volume: u0, success-rate: u100, average-time: u0} 
+                                   (map-get? bridge-stats "ethereum")))
+        (polygon-stats (default-to {total-bridged: u0, total-volume: u0, success-rate: u100, average-time: u0} 
+                                  (map-get? bridge-stats "polygon")))
+        (arbitrum-stats (default-to {total-bridged: u0, total-volume: u0, success-rate: u100, average-time: u0} 
+                                   (map-get? bridge-stats "arbitrum")))
+        (optimism-stats (default-to {total-bridged: u0, total-volume: u0, success-rate: u100, average-time: u0} 
+                                   (map-get? bridge-stats "optimism"))))
+    {
+      total-bridges: (+ (+ (get total-bridged ethereum-stats) (get total-bridged polygon-stats))
+                       (+ (get total-bridged arbitrum-stats) (get total-bridged optimism-stats))),
+      ethereum: ethereum-stats,
+      polygon: polygon-stats,
+      arbitrum: arbitrum-stats,
+      optimism: optimism-stats
+    }))
+
+;; Pause/unpause specific chain
+(define-public (set-chain-status (chain (string-ascii 32)) (active bool))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+    (let ((current-config (unwrap! (map-get? chain-configs chain) ERR-INVALID-CHAIN)))
+      (map-set chain-configs chain
+        (merge current-config {active: active}))
+      
+      (print {
+        notification: "chain-status-updated",
+        payload: {
+          chain: chain,
+          active: active,
+          updated-by: tx-sender
+        }
+      })
+      
+      (ok true))))
+
+;; Bulk validator operations
+(define-public (bulk-add-validators (validators (list 10 principal)))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+    (fold add-single-validator validators (ok true))))
+
+(define-private (add-single-validator (validator principal) (acc (response bool uint)))
+  (match acc
+    success (add-validator validator)
+    error (err error)))
+
+;; Emergency pause all bridges
+(define-public (emergency-pause)
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+    (var-set bridge-enabled false)
+    
+    (print {
+      notification: "emergency-pause-activated",
+      payload: {
+        paused-by: tx-sender,
+        timestamp: block-height
+      }
+    })
+    
+    (ok true)))
+;; Bridge request history tracking
+(define-map request-history uint {
+  previous-status: (string-ascii 16),
+  new-status: (string-ascii 16),
+  changed-at: uint,
+  changed-by: principal
+})
+
+;; Update request status with history
+(define-private (update-request-status (request-id uint) (new-status (string-ascii 16)))
+  (let ((request (unwrap-panic (map-get? bridge-requests request-id))))
+    (begin
+      ;; Record history
+      (map-set request-history request-id {
+        previous-status: (get status request),
+        new-status: new-status,
+        changed-at: block-height,
+        changed-by: tx-sender
+      })
+      
+      ;; Update request
+      (map-set bridge-requests request-id
+        (merge request {status: new-status}))
+      
+      (ok true))))
+
+;; Get request history
+(define-read-only (get-request-history (request-id uint))
+  (map-get? request-history request-id))
+;; Bridge fee discount system
+(define-map user-discounts principal {
+  discount-percentage: uint,
+  valid-until: uint,
+  granted-by: principal
+})
+
+;; Grant discount to user
+(define-public (grant-user-discount 
+  (user principal) 
+  (discount-percentage uint) 
+  (valid-blocks uint))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+    (asserts! (<= discount-percentage u50) ERR-INVALID-REQUEST) ;; Max 50% discount
+    
+    (map-set user-discounts user {
+      discount-percentage: discount-percentage,
+      valid-until: (+ block-height valid-blocks),
+      granted-by: tx-sender
+    })
+    
+    (print {
+      notification: "discount-granted",
+      payload: {
+        user: user,
+        discount: discount-percentage,
+        valid-until: (+ block-height valid-blocks)
+      }
+    })
+    
+    (ok true)))
+
+;; Calculate discounted fee
+(define-private (calculate-bridge-fee (user principal) (base-fee uint))
+  (match (map-get? user-discounts user)
+    discount-info (if (> (get valid-until discount-info) block-height)
+                    (- base-fee (/ (* base-fee (get discount-percentage discount-info)) u100))
+                    base-fee)
+    base-fee))
