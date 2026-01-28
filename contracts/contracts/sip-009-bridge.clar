@@ -59,6 +59,8 @@
 (define-data-var bridge-enabled bool true)
 (define-data-var min-validator-signatures uint u3)
 (define-data-var bridge-fee-percentage uint u100) ;; 1%
+(define-data-var max-bridge-amount uint u1000000000) ;; 1000 STX max
+(define-data-var bridge-timeout-blocks uint u144) ;; ~24 hours
 
 ;; Initialize supported chains
 (map-set chain-configs "ethereum" {
