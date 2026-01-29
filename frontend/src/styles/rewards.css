@@ -1,0 +1,87 @@
+/**
+ * Rewards Dashboard Styles
+ * Premium dark-mode aesthetics for the rewards system components.
+ */
+
+.rewards-dashboard {
+  background: radial-gradient(circle at top right, #1a1a2e, #0b0e14);
+  border-radius: 24px;
+  padding: 3rem 2rem;
+  margin: 3rem 0;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.4);
+  border: 1px solid rgba(255, 255, 255, 0.03);
+}
+
+.rewards-grid {
+  display: grid;
+  grid-template-columns: 1.2fr 0.8fr;
+  gap: 2rem;
+  align-items: start;
+}
+
+@media (max-width: 1024px) {
+  .rewards-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Base card overrides for rewards */
+.rewards-card, .activity-tracker, .multiplier-settings, .leaderboard-card {
+  transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+.rewards-card:hover, .activity-tracker:hover, .multiplier-settings:hover {
+  transform: translateY(-5px);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5), 0 0 20px rgba(139, 92, 246, 0.1);
+}
+
+/* Stat Box Enhancements */
+.stat-box {
+  background: rgba(0, 0, 0, 0.2);
+  backdrop-filter: blur(4px);
+  transition: border-color 0.3s ease;
+}
+
+.stat-box:hover {
+  border-color: rgba(139, 92, 246, 0.3);
+}
+
+/* Activity Log Pulse and Fade */
+.activity-log {
+  position: relative;
+}
+
+.activity-log::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 20px;
+  background: linear-gradient(transparent, rgba(11, 14, 20, 0.8));
+  pointer-events: none;
+}
+
+/* Progress Ring Animation */
+@keyframes ring-draw {
+  from {
+    stroke-dashoffset: 44;
+  }
+  to {
+    stroke-dashoffset: var(--offset);
+  }
+}
+
+.impact-badge circle:last-child {
+  animation: ring-draw 1.5s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+/* Hover glow for buttons */
+.rewards-dashboard button:not(:disabled):hover {
+  box-shadow: 0 0 15px rgba(139, 92, 246, 0.4);
+}
+
+/* Custom Typography for Numbers */
+.font-mono {
+  letter-spacing: -0.02em;
+}
