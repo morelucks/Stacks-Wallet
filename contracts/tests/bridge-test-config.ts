@@ -1,0 +1,42 @@
+export const BRIDGE_TEST_CONFIG = {
+  // Test timeouts and limits
+  DEFAULT_TIMEOUT: 144, // blocks
+  MAX_VALIDATORS: 10,
+  MIN_VALIDATORS: 3,
+  
+  // Fee configurations for testing
+  CHAIN_FEES: {
+    ethereum: 1000000,
+    polygon: 500000,
+    arbitrum: 750000,
+    optimism: 600000
+  },
+  
+  // Test addresses
+  TEST_ADDRESSES: {
+    ethereum: '0x1234567890123456789012345678901234567890',
+    polygon: '0x2234567890123456789012345678901234567890',
+    arbitrum: '0x3234567890123456789012345678901234567890',
+    optimism: '0x4234567890123456789012345678901234567890'
+  },
+  
+  // Error codes
+  ERRORS: {
+    NOT_AUTHORIZED: 401,
+    TOKEN_LOCKED: 402,
+    INVALID_CHAIN: 403,
+    INSUFFICIENT_VALIDATORS: 404,
+    BRIDGE_DISABLED: 405,
+    INVALID_REQUEST: 406,
+    INSUFFICIENT_BALANCE: 407,
+    INVALID_SIGNATURE: 408,
+    REQUEST_EXPIRED: 409
+  },
+  
+  // Property test configurations
+  PROPERTY_TEST_RUNS: {
+    FAST: 25,
+    MEDIUM: 50,
+    THOROUGH: 100
+  }
+};
