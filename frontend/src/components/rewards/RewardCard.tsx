@@ -2,6 +2,7 @@ import React from 'react';
 import { Card } from '../ui/Card';
 import { Button } from '../ui/Button';
 import { useRewards } from '../../hooks/useRewards';
+import { appKit } from '../../lib/appkit.instance';
 
 /**
  * RewardCard Component
@@ -56,12 +57,14 @@ export const RewardCard: React.FC = () => {
 
             <div className="flex justify-between items-start z-10">
                 <div>
-                    <h3 className="text-2xl font-black text-white tracking-tighter uppercase">Reward Account</h3>
-                    <p className="text-xs text-gray-500 font-mono">ID: {appKit.getState().accounts?.[0]?.address.slice(-8)}</p>
+                    <div>
+                        <h3 className="text-2xl font-black text-white tracking-tighter uppercase">Reward Account</h3>
+                        <p className="text-xs text-gray-500 font-mono">ID: {(appKit.getState() as any).accounts?.[0]?.address.slice(-8)}</p>
+                    </div>
                 </div>
                 <div className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest ${stats?.isGitHubVerified
-                        ? 'bg-green-500/10 text-green-400 border border-green-500/20'
-                        : 'bg-yellow-500/10 text-yellow-500 border border-yellow-500/20'
+                    ? 'bg-green-500/10 text-green-400 border border-green-500/20'
+                    : 'bg-yellow-500/10 text-yellow-500 border border-yellow-500/20'
                     }`}>
                     {stats?.isGitHubVerified ? 'Verified GH' : 'GH Pending'}
                 </div>
@@ -91,8 +94,8 @@ export const RewardCard: React.FC = () => {
                     onClick={handleClaim}
                     disabled={isLoading || !stats || stats.currentPayout === 0}
                     className={`w-full h-12 transition-all duration-300 font-bold uppercase tracking-widest ${!isLoading && stats && stats.currentPayout > 0
-                            ? 'bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 border-none'
-                            : 'bg-gray-800 text-gray-500'
+                        ? 'bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 border-none'
+                        : 'bg-gray-800 text-gray-500'
                         }`}
                 >
                     {isLoading ? (

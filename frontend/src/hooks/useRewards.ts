@@ -7,6 +7,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useContractCall } from './useContractCall';
 import { appKit } from '../lib/appkit.instance';
 import { uintCV, bufferCV } from '@stacks/transactions';
+import { githubApiService, type GitHubContributionData } from '../lib/github-api';
 
 export interface RewardStats {
     baseScore: number;
@@ -14,6 +15,7 @@ export interface RewardStats {
     totalImpact: number;
     currentPayout: number;
     isGitHubVerified: boolean;
+    githubData?: GitHubContributionData;
 }
 
 export function useRewards() {
@@ -23,7 +25,7 @@ export function useRewards() {
 
     // Get the current connected address from AppKit state
     const address = useMemo(() => {
-        const state = appKit.getState();
+        const state = appKit.getState() as any;
         return state.accounts?.[0]?.address || null;
     }, [appKit.getState()]);
 
@@ -49,6 +51,37 @@ export function useRewards() {
             setStats(mockData);
         } catch (error) {
             console.error("Failed to fetch reward statistics:", error);
+        } finally {
+            setIsLoading(false);
+        }
+    }, [address]);
+
+    /**
+   * Links a GitHub account to the current Stacks address.
+   */
+    const linkGitHubAccount = useCallback(async (username: string) => {
+        if (!address) return;
+
+        setIsLoading(true);
+        try {
+            const isValid = await githubApiService.validateUser(username);
+            if (!isValid) throw new Error("Invalid GitHub username");
+
+            const ghData = await githubApiService.fetchUserContributions(username);
+            const ghScore = githubApiService.calculateActivityScore(ghData);
+
+            // Update local state temporarily
+            setStats(prev => prev ? {
+                ...prev,
+                isGitHubVerified: true,
+                baseScore: prev.baseScore + ghScore,
+                githubData: ghData
+            } : null);
+
+            return true;
+        } catch (error) {
+            console.error("Failed to link GitHub account:", error);
+            return false;
         } finally {
             setIsLoading(false);
         }
@@ -93,6 +126,7 @@ export function useRewards() {
         stats,
         isLoading: isLoading || isCalling,
         fetchRewardStats,
+        linkGitHubAccount,
         claimAvailableRewards,
         lastTxId,
         isConnected: !!address
