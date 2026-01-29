@@ -7,6 +7,11 @@ import { formatAddress } from "./utils/wallet.utils";
 import { ContractDeploy } from "./components/ContractDeploy";
 import { ContractInteract } from "./components/ContractInteract";
 import { TransactionHistory } from "./components/TransactionHistory";
+import { RewardCard } from "./components/rewards/RewardCard";
+import { Leaderboard } from "./components/rewards/Leaderboard";
+import { ActivityTracker } from "./components/rewards/ActivityTracker";
+import { MultiplierSettings } from "./components/rewards/MultiplierSettings";
+import "./styles/rewards.css";
 
 type NetworkKey = "mainnet" | "testnet";
 
@@ -177,7 +182,7 @@ function App() {
   return (
     <div className="page">
       <header className="hero">
-      <div>
+        <div>
           <p className="eyebrow">Stacks Wallet UI</p>
           <h1>Interact with the SIP-010 token</h1>
           <p className="lede">
@@ -191,8 +196,8 @@ function App() {
               <span style={{ fontSize: "0.875rem", color: "#fff", fontFamily: "monospace" }}>
                 {address ? formatAddress(address) : ""}
               </span>
-              <button 
-                onClick={disconnect} 
+              <button
+                onClick={disconnect}
                 style={{ padding: "0.5rem 1rem" }}
                 disabled={isConnecting}
               >
@@ -200,8 +205,8 @@ function App() {
               </button>
             </div>
           ) : (
-            <button 
-              onClick={connect} 
+            <button
+              onClick={connect}
               disabled={isConnecting}
               style={{ padding: "0.5rem 1rem" }}
             >
@@ -209,9 +214,9 @@ function App() {
             </button>
           )}
           {walletError && (
-            <div style={{ 
-              padding: "0.5rem", 
-              backgroundColor: "rgba(255, 0, 0, 0.1)", 
+            <div style={{
+              padding: "0.5rem",
+              backgroundColor: "rgba(255, 0, 0, 0.1)",
               border: "1px solid rgba(255, 0, 0, 0.3)",
               borderRadius: "4px",
               fontSize: "0.875rem",
@@ -221,10 +226,10 @@ function App() {
               gap: "0.5rem"
             }}>
               <span style={{ color: "#ff6b6b" }}>{walletError.message}</span>
-              <button 
+              <button
                 onClick={clearError}
-                style={{ 
-                  padding: "0.25rem 0.5rem", 
+                style={{
+                  padding: "0.25rem 0.5rem",
                   fontSize: "0.75rem",
                   background: "transparent",
                   border: "none",
@@ -287,7 +292,7 @@ function App() {
               )}
             </div>
           </label>
-      </div>
+        </div>
         <div className="actions">
           <button onClick={loadTokenInfo} disabled={loading}>
             {loading ? "Loading..." : "Load token info"}
@@ -302,7 +307,7 @@ function App() {
           )}
           <button onClick={clearResults} disabled={loading}>
             Clear results
-        </button>
+          </button>
         </div>
         {error && <div className="error">{error}</div>}
       </section>
@@ -326,8 +331,8 @@ function App() {
             <p className="label">Network / API</p>
             <p className="value small">
               {network} · {apiBaseUrl}
-        </p>
-      </div>
+            </p>
+          </div>
         </div>
       </section>
 
@@ -368,6 +373,30 @@ function App() {
           )}
         </section>
       )}
+
+      {/* Rewards Dashboard Section (Commit 14) */}
+      <section className="rewards-dashboard py-12">
+        <div className="section-header mb-8">
+          <h2 className="text-4xl font-black text-white uppercase italic tracking-tighter">Rewards & Impact</h2>
+          <p className="text-gray-500 text-sm">Boost your earnings by contributing to the Stacks ecosystem.</p>
+        </div>
+
+        <div className="rewards-grid">
+          <div className="rewards-main-column">
+            <RewardCard />
+            <div className="mt-8">
+              <ActivityTracker />
+            </div>
+          </div>
+
+          <div className="rewards-sidebar-column">
+            <MultiplierSettings />
+            <div className="mt-8">
+              <Leaderboard />
+            </div>
+          </div>
+        </div>
+      </section>
 
       <section className="panel">
         <ContractDeploy network={network} />
