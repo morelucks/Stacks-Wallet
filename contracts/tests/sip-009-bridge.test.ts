@@ -316,3 +316,235 @@ describe('SIP-009 Bridge Contract Tests', () => {
       }
     });
   });
+  describe('Property-Based Tests', () => {
+    it('Property 1: Bridge request state transitions', () => {
+      fc.assert(fc.property(
+        bridgeRequestGenerator,
+        (request) => {
+          const result = BridgeTestUtils.createBridgeRequest(
+            request.tokenId, request.targetChain, request.targetAddress, wallet1
+          );
+
+          if (result.result.type === 'ok') {
+            const requestId = result.result.value;
+            
+            // Verify request was created with correct state
+            const requestData = BridgeTestUtils.getBridgeRequest(
+              Number(requestId.value), wallet1
+            );
+
+            expect(requestData.result).toBeSome();
+            const data = requestData.result.value;
+            
+            BridgeTestUtils.verifyRequestProperties(
+              data, request.tokenId, request.targetChain, 
+              request.targetAddress, wallet1, 'pending'
+            );
+
+            // Verify token is locked
+            const isLocked = BridgeTestUtils.isTokenLocked(request.tokenId, wallet1);
+            expect(isLocked.result).toBeBool(true);
+          }
+        }
+      ), { numRuns: 50 });
+    });
+
+    it('Property 2: Fee calculation consistency', () => {
+      fc.assert(fc.property(
+        targetChainGenerator,
+        tokenIdGenerator,
+        ethereumAddressGenerator,
+        (targetChain, tokenId, targetAddress) => {
+          const chainConfig = BridgeTestUtils.getChainConfig(targetChain, deployer);
+          expect(chainConfig.result).toBeSome();
+          
+          const config = chainConfig.result.value;
+          const expectedFee = Number(config['bridge-fee'].value);
+
+          const initialBalance = simnet.getAssetsMap().get(wallet1)?.['STX'] || 0;
+          
+          const result = BridgeTestUtils.createBridgeRequest(
+            tokenId, targetChain, targetAddress, wallet1
+          );
+
+          if (result.result.type === 'ok') {
+            const finalBalance = simnet.getAssetsMap().get(wallet1)?.['STX'] || 0;
+            const feeCharged = initialBalance - finalBalance;
+            expect(feeCharged).toBe(expectedFee);
+          }
+        }
+      ), { numRuns: 30 });
+    });
+
+    it('Property 3: Token locking integrity', () => {
+      fc.assert(fc.property(
+        tokenIdGenerator,
+        targetChainGenerator,
+        ethereumAddressGenerator,
+        (tokenId, targetChain, targetAddress) => {
+          // First request should succeed and lock token
+          const result1 = BridgeTestUtils.createBridgeRequest(
+            tokenId, targetChain, targetAddress, wallet1
+          );
+
+          if (result1.result.type === 'ok') {
+            // Token should be locked
+            const isLocked = BridgeTestUtils.isTokenLocked(tokenId, wallet1);
+            expect(isLocked.result).toBeBool(true);
+
+            // Second request with same token should fail
+            const result2 = BridgeTestUtils.createBridgeRequest(
+              tokenId, targetChain, targetAddress, wallet1
+            );
+            expect(result2.result).toBeErr(Cl.uint(BridgeTestUtils.ERRORS.TOKEN_LOCKED));
+          }
+        }
+      ), { numRuns: 30 });
+    });
+
+    it('Property 4: Validator signature thresholds', () => {
+      fc.assert(fc.property(
+        bridgeRequestGenerator,
+        fc.integer({ min: 1, max: 5 }),
+        (request, numSignatures) => {
+          // Create bridge request
+          const createResult = BridgeTestUtils.createBridgeRequest(
+            request.tokenId, request.targetChain, request.targetAddress, wallet1
+          );
+
+          if (createResult.result.type === 'ok') {
+            const requestId = Number(createResult.result.value.value);
+            const signature = BridgeTestUtils.generateMockSignature();
+
+            // Add signatures up to numSignatures
+            for (let i = 0; i < Math.min(numSignatures, validators.length); i++) {
+              simnet.callPublicFn(
+                BridgeTestUtils.CONTRACT_NAME,
+                'validate-bridge-request',
+                [Cl.uint(requestId), Cl.buffer(signature)],
+                validators[i]
+              );
+            }
+
+            // Check if request is confirmed based on threshold (3 signatures needed)
+            const requestData = BridgeTestUtils.getBridgeRequest(requestId, wallet1);
+            const status = requestData.result.value['status'];
+
+            if (numSignatures >= 3) {
+              expect(status).toStrictEqual(Cl.stringAscii('confirmed'));
+            } else {
+              expect(status).toStrictEqual(Cl.stringAscii('pending'));
+            }
+          }
+        }
+      ), { numRuns: 25 });
+    });
+
+    it('Property 5: Error handling completeness', () => {
+      fc.assert(fc.property(
+        tokenIdGenerator,
+        invalidChainGenerator,
+        ethereumAddressGenerator,
+        (tokenId, invalidChain, targetAddress) => {
+          const result = BridgeTestUtils.createBridgeRequest(
+            tokenId, invalidChain, targetAddress, wallet1
+          );
+
+          // Should always fail with invalid chain error
+          expect(result.result).toBeErr(Cl.uint(BridgeTestUtils.ERRORS.INVALID_CHAIN));
+
+          // Token should not be locked
+          const isLocked = BridgeTestUtils.isTokenLocked(tokenId, wallet1);
+          expect(isLocked.result).toBeBool(false);
+        }
+      ), { numRuns: 20 });
+    });
+
+    it('Property 6: Batch operation atomicity', () => {
+      fc.assert(fc.property(
+        batchRequestGenerator,
+        (requests) => {
+          // Ensure we have unique token IDs to avoid conflicts
+          const uniqueRequests = requests.map((req, index) => ({
+            ...req,
+            tokenId: req.tokenId + index * 1000
+          }));
+
+          const result = BridgeTestUtils.batchInitiateBridgeRequests(
+            uniqueRequests, wallet1
+          );
+
+          if (result.result.type === 'ok') {
+            // All tokens should be locked
+            for (const req of uniqueRequests) {
+              const isLocked = BridgeTestUtils.isTokenLocked(req.tokenId, wallet1);
+              expect(isLocked.result).toBeBool(true);
+            }
+          } else {
+            // If batch failed, no tokens should be locked
+            for (const req of uniqueRequests) {
+              const isLocked = BridgeTestUtils.isTokenLocked(req.tokenId, wallet1);
+              expect(isLocked.result).toBeBool(false);
+            }
+          }
+        }
+      ), { numRuns: 15 });
+    });
+
+    it('Property 7: Configuration isolation', () => {
+      fc.assert(fc.property(
+        targetChainGenerator,
+        fc.integer({ min: 1000000, max: 5000000 }),
+        fc.integer({ min: 5, max: 50 }),
+        (chain, newFee, newConfirmations) => {
+          // Create request with original config
+          const request1 = BridgeTestUtils.createBridgeRequest(
+            1, chain, '0x1111111111111111111111111111111111111111', wallet1
+          );
+
+          // Update chain config
+          BridgeTestUtils.updateChainConfig(
+            chain, true, newConfirmations, newFee, deployer
+          );
+
+          // Create request with new config
+          const request2 = BridgeTestUtils.createBridgeRequest(
+            2, chain, '0x2222222222222222222222222222222222222222', wallet1
+          );
+
+          if (request1.result.type === 'ok' && request2.result.type === 'ok') {
+            // Verify new config is applied
+            const config = BridgeTestUtils.getChainConfig(chain, deployer);
+            expect(config.result.value['bridge-fee']).toBeUint(newFee);
+            expect(config.result.value['min-confirmations']).toBeUint(newConfirmations);
+          }
+        }
+      ), { numRuns: 20 });
+    });
+
+    it('Property 8: Bridge pause behavior', () => {
+      fc.assert(fc.property(
+        bridgeRequestGenerator,
+        (request) => {
+          // Pause bridge
+          BridgeTestUtils.setBridgeEnabled(false, deployer);
+
+          // Try to create request while paused
+          const result = BridgeTestUtils.createBridgeRequest(
+            request.tokenId, request.targetChain, request.targetAddress, wallet1
+          );
+
+          // Should always fail when bridge is disabled
+          expect(result.result).toBeErr(Cl.uint(BridgeTestUtils.ERRORS.BRIDGE_DISABLED));
+
+          // Token should not be locked
+          const isLocked = BridgeTestUtils.isTokenLocked(request.tokenId, wallet1);
+          expect(isLocked.result).toBeBool(false);
+
+          // Re-enable for next test
+          BridgeTestUtils.setBridgeEnabled(true, deployer);
+        }
+      ), { numRuns: 15 });
+    });
+  });
+});
