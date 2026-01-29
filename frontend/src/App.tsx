@@ -92,6 +92,30 @@ function App() {
         />
       )}
 
+      {/* Rewards Dashboard Section (Commit 14) */}
+      <section className="rewards-dashboard py-12">
+        <div className="section-header mb-8">
+          <h2 className="text-4xl font-black text-white uppercase italic tracking-tighter">Rewards & Impact</h2>
+          <p className="text-gray-500 text-sm">Boost your earnings by contributing to the Stacks ecosystem.</p>
+        </div>
+
+        <div className="rewards-grid">
+          <div className="rewards-main-column">
+            <RewardCard />
+            <div className="mt-8">
+              <ActivityTracker />
+            </div>
+          </div>
+
+          <div className="rewards-sidebar-column">
+            <MultiplierSettings />
+            <div className="mt-8">
+              <Leaderboard />
+            </div>
+          </div>
+        </div>
+      </section>
+
       <section className="panel">
         <ContractDeploy network={network} />
       </section>
