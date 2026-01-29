@@ -154,7 +154,7 @@ export function ContractDeploy({ network }: ContractDeployProps) {
           <textarea
             value={contractSource}
             onChange={(e) => setContractSource(e.target.value)}
-            placeholder="(define-public (hello-world)&#10;  (ok \"Hello, World!\"))"
+            placeholder={"(define-public (hello-world)\n  (ok \"Hello, World!\"))"}
             disabled={isDeploying}
             rows={15}
             style={{ 

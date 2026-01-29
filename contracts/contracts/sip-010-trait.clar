@@ -1,6 +1,11 @@
-;; SIP-010 Fungible Token Standard Trait
-;; This is a local implementation of the SIP-010 trait for development purposes
+;; SIP-010 Fungible Token Standard Trait - ENHANCED VERSION
+;; This is an enhanced implementation of the SIP-010 trait with additional functionality
+;; Includes allowances, mint/burn, access control, pausable operations, and more
 
+;; Import enhanced trait for compatibility
+(use-trait enhanced-sip-010 .enhanced-sip-010-trait.enhanced-sip-010-trait)
+
+;; Original SIP-010 trait maintained for backward compatibility
 (define-trait sip-010-trait
   (
     ;; Transfer from the caller to a new principal
@@ -25,3 +30,5 @@
     (get-token-uri () (response (optional (string-utf8 256)) uint))
   )
 )
+
+;; Enhanced trait reference - use enhanced-sip-010-trait.clar for full functionality

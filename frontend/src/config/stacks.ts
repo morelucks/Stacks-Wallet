@@ -9,7 +9,7 @@ export const stacksNetworks = {
     mainnet: new StacksMainnet(),
 }
 
-export const activeStacksNetwork = stacksNetworks.testnet
+export const activeStacksNetwork = import.meta.env.PROD ? stacksNetworks.mainnet : stacksNetworks.testnet
 
 // App configuration for Stacks Connect
 export const appConfig = new AppConfig(['store_write', 'publish_data'])
@@ -48,4 +48,23 @@ export const getStacksUserData = () => {
         return userSession.loadUserData()
     }
     return null
+}
+
+export const getStxBalance = async (address: string) => {
+    const response = await fetch(`${activeStacksNetwork.coreApiUrl}/extended/v1/address/${address}/balances`);
+    return response.json();
+}
+export const getSIP10Balances = async (address: string) => {
+    // Placeholder for SIP-10 token fetching
+    return []
+}
+export const signTransaction = async (tx: any) => {
+    // Signing logic placeholder
+}
+export const getSIP10Balances = async (address: string) => {
+    // Placeholder for SIP-10 token fetching
+    return []
+}
+export const signTransaction = async (tx: any) => {
+    // Signing logic placeholder
 }

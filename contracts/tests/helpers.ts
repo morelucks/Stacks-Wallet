@@ -167,3 +167,189 @@ export const DEFAULT_WALLET_DATA: TestWalletData = {
   memberName: 'Test Member',
   memberFunding: 100000
 };
+/**
+ * NFT-specific helper functions
+ */
+
+/**
+ * NFT test data interface
+ */
+export interface NFTTestData {
+  tokenId: number;
+  owner: string;
+  recipient: string;
+  contractOwner: string;
+}
+
+/**
+ * NFT error codes
+ */
+export const NFT_ERROR_CODES = {
+  ERR_OWNER_ONLY: 100,
+  ERR_NOT_TOKEN_OWNER: 101,
+  ERR_TOKEN_EXISTS: 102,
+  ERR_TOKEN_NOT_FOUND: 103
+} as const;
+
+/**
+ * Create NFT test data with default values
+ */
+export function createNFTTestData(overrides: Partial<NFTTestData> = {}): NFTTestData {
+  return {
+    tokenId: 1,
+    owner: 'ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM',
+    recipient: 'ST1SJ3DTE5DN7X54YDH5D64R3BCB6A2AG2ZQ8YPD5',
+    contractOwner: 'ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM',
+    ...overrides
+  };
+}
+
+/**
+ * Assert NFT ownership
+ */
+export function assertNFTOwnership(
+  contractName: string,
+  tokenId: number,
+  expectedOwner: string,
+  caller: string = 'deployer'
+) {
+  const result = simnet.callReadOnlyFn(
+    contractName,
+    'get-owner',
+    [uint(tokenId)],
+    caller
+  );
+
+  if (!result.isOk()) {
+    throw new Error(`Failed to get owner for token ${tokenId}: ${JSON.stringify(result)}`);
+  }
+
+  expectEqual(result.value, Cl.ok(some(principal(expectedOwner))));
+}
+
+/**
+ * Assert NFT does not exist
+ */
+export function assertNFTNotExists(
+  contractName: string,
+  tokenId: number,
+  caller: string = 'deployer'
+) {
+  const result = simnet.callReadOnlyFn(
+    contractName,
+    'get-owner',
+    [uint(tokenId)],
+    caller
+  );
+
+  if (!result.isOk()) {
+    throw new Error(`Failed to check token existence for ${tokenId}: ${JSON.stringify(result)}`);
+  }
+
+  expectEqual(result.value, Cl.ok(none()));
+}
+
+/**
+ * Mint NFT helper
+ */
+export function mintNFT(
+  contractName: string,
+  recipient: string,
+  minter: string = 'deployer'
+) {
+  return simnet.callPublicFn(
+    contractName,
+    'mint',
+    [principal(recipient)],
+    minter
+  );
+}
+
+/**
+ * Transfer NFT helper
+ */
+export function transferNFT(
+  contractName: string,
+  tokenId: number,
+  sender: string,
+  recipient: string,
+  caller: string
+) {
+  return simnet.callPublicFn(
+    contractName,
+    'transfer',
+    [uint(tokenId), principal(sender), principal(recipient)],
+    caller
+  );
+}
+
+/**
+ * Get last token ID helper
+ */
+export function getLastTokenId(contractName: string, caller: string = 'deployer') {
+  return simnet.callReadOnlyFn(
+    contractName,
+    'get-last-token-id',
+    [],
+    caller
+  );
+}
+
+/**
+ * Validate NFT error code
+ */
+export function assertNFTError(result: any, expectedErrorCode: number) {
+  if (!result.isErr()) {
+    throw new Error(`Expected error result, got: ${JSON.stringify(result)}`);
+  }
+  expectEqual(result.value, Cl.error(uint(expectedErrorCode)));
+}
+/**
+ * Additional NFT testing utilities
+ */
+
+/**
+ * Batch mint multiple tokens
+ */
+export function batchMintNFTs(
+  contractName: string,
+  recipients: string[],
+  minter: string = 'deployer'
+): number[] {
+  const tokenIds: number[] = [];
+  
+  recipients.forEach((recipient, index) => {
+    const result = simnet.callPublicFn(
+      contractName,
+      'mint',
+      [principal(recipient)],
+      minter
+    );
+    
+    if (result.isOk()) {
+      tokenIds.push(index + 1);
+    }
+  });
+  
+  return tokenIds;
+}
+
+/**
+ * Verify token ownership batch
+ */
+export function verifyTokenOwnership(
+  contractName: string,
+  tokenOwnerPairs: Array<{ tokenId: number; owner: string }>,
+  caller: string = 'deployer'
+) {
+  tokenOwnerPairs.forEach(({ tokenId, owner }) => {
+    const result = simnet.callReadOnlyFn(
+      contractName,
+      'get-owner',
+      [uint(tokenId)],
+      caller
+    );
+    
+    expectEqual(result.value, Cl.ok(some(principal(owner))));
+  });
+}

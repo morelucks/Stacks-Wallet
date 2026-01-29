@@ -6,6 +6,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useAppKitAccount, useAppKit } from "@reown/appkit/react";
 import type { UseWalletReturn, WalletError } from "../types/wallet";
 import { validateProjectId } from "../config/wallet.config";
 import { createWalletError, extractErrorMessage, isUserRejection } from "../utils/wallet.utils";
@@ -35,91 +36,27 @@ if (typeof window !== "undefined") {
  * ```
  */
 export function useWallet(): UseWalletReturn {
-  const [address, setAddress] = useState<string | null>(null);
+  const { address: appKitAddress, isConnected: appKitConnected } = useAppKitAccount();
+  const { open } = useAppKit();
   const [isConnecting, setIsConnecting] = useState(false);
   const [error, setError] = useState<WalletError | null>(null);
-  const unsubscribeRef = useRef<(() => void) | null>(null);
   const isMountedRef = useRef(true);
   const connectionTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   
   // Use connection persistence hook
   useWalletConnection();
 
-  // Initialize wallet state and subscribe to changes
+  // Sync address from AppKit and save to storage
   useEffect(() => {
-    isMountedRef.current = true;
-
-    // Get initial state synchronously
-    try {
-      const initialState = appKit.getState();
-      const initialAddress = initialState.accounts?.[0]?.address || null;
-      if (isMountedRef.current && initialAddress) {
-        setAddress(initialAddress);
-        saveLastConnectedAddress(initialAddress);
-      } else {
-        // Try to restore from storage if no active connection
-        const lastAddress = getLastConnectedAddress();
-        if (lastAddress && isMountedRef.current) {
-          // Address stored but not connected - will be handled by AppKit
-          console.log("Previous wallet address found in storage:", lastAddress);
-        }
-      }
-    } catch (err) {
-      console.error("Failed to get initial wallet state:", err);
+    if (appKitAddress) {
+      saveLastConnectedAddress(appKitAddress);
     }
-
-    // Subscribe to state changes
-    try {
-      const unsubscribe = appKit.subscribe((state) => {
-        if (!isMountedRef.current) return;
-
-        const accountAddress = state.accounts?.[0]?.address || null;
-        const wasConnected = address !== null;
-        const isNowConnected = accountAddress !== null;
-
-        // Update address
-        setAddress(accountAddress);
-
-        // Save connected address to storage
-        if (accountAddress) {
-          saveLastConnectedAddress(accountAddress);
-        }
-
-        // Reset connecting state when connection status changes
-        if (wasConnected !== isNowConnected) {
-          setIsConnecting(false);
-          setError(null); // Clear errors on successful state change
-        }
-      });
-
-      unsubscribeRef.current = unsubscribe;
-
-      return () => {
-        if (unsubscribeRef.current) {
-          unsubscribeRef.current();
-          unsubscribeRef.current = null;
-        }
-      };
-    } catch (err) {
-      console.error("Failed to subscribe to wallet state:", err);
-      setError(
-        createWalletError(
-          "SUBSCRIPTION_ERROR",
-          "Failed to subscribe to wallet state changes",
-          err
-        )
-      );
-    }
-  }, [address]);
+  }, [appKitAddress]);
 
   // Cleanup on unmount
   useEffect(() => {
     return () => {
       isMountedRef.current = false;
-      if (unsubscribeRef.current) {
-        unsubscribeRef.current();
-        unsubscribeRef.current = null;
-      }
       if (connectionTimeoutRef.current) {
         clearTimeout(connectionTimeoutRef.current);
         connectionTimeoutRef.current = null;
@@ -136,7 +73,7 @@ export function useWallet(): UseWalletReturn {
       return;
     }
 
-    if (address) {
+    if (appKitAddress) {
       console.warn("Wallet already connected");
       return;
     }
@@ -159,13 +96,13 @@ export function useWallet(): UseWalletReturn {
     }, 30000);
 
     try {
-      await appKit.open();
+      await open();
       // Clear timeout on success
       if (connectionTimeoutRef.current) {
         clearTimeout(connectionTimeoutRef.current);
         connectionTimeoutRef.current = null;
       }
-      // State will be updated via subscription
+      setIsConnecting(false);
     } catch (err) {
       if (!isMountedRef.current) return;
 
@@ -192,20 +129,19 @@ export function useWallet(): UseWalletReturn {
 
       setIsConnecting(false);
     }
-  }, [isConnecting, address]);
+  }, [isConnecting, appKitAddress, open]);
 
   /**
    * Disconnect from the current wallet
    */
   const disconnect = useCallback(async (): Promise<void> => {
-    if (!address) {
+    if (!appKitAddress) {
       console.warn("No wallet connected to disconnect");
       return;
     }
 
     try {
       await appKit.disconnect();
-      // State will be updated via subscription
       setError(null);
     } catch (err) {
       if (!isMountedRef.current) return;
@@ -220,7 +156,7 @@ export function useWallet(): UseWalletReturn {
       );
       console.error("Wallet disconnection error:", err);
     }
-  }, [address]);
+  }, [appKitAddress]);
 
   /**
    * Clear any wallet errors
@@ -230,8 +166,8 @@ export function useWallet(): UseWalletReturn {
   }, []);
 
   return {
-    address,
-    isConnected: !!address,
+    address: appKitAddress || null,
+    isConnected: appKitConnected || false,
     isConnecting,
     error,
     connect,

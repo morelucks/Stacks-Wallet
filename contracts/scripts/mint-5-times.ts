@@ -17,6 +17,7 @@ const PRIVATE_KEY = process.env.PRIVATE_KEY;
 const NETWORK_ENV = process.env.STACKS_NETWORK || 'mainnet';
 const CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS;
 const ADMIN_ADDRESS = process.env.ADMIN_ADDRESS;
+const RECIPIENT_ADDRESS = process.env.DEFAULT_MEMBER_ADDRESS;
 
 if (!PRIVATE_KEY) {
     console.error("❌ Missing PRIVATE_KEY in .env file");
@@ -34,10 +35,17 @@ if (!ADMIN_ADDRESS) {
     process.exit(1);
 }
 
+if (!RECIPIENT_ADDRESS) {
+    console.error("❌ Missing DEFAULT_MEMBER_ADDRESS in .env file");
+    console.error("💡 Please set DEFAULT_MEMBER_ADDRESS in your .env file");
+    process.exit(1);
+}
+
 // TypeScript assertions
 const privateKey: string = PRIVATE_KEY;
 const contractAddress: string = CONTRACT_ADDRESS;
 const adminAddress: string = ADMIN_ADDRESS;
+const recipientAddress: string = RECIPIENT_ADDRESS;
 
 // Parse contract address
 const [contractAddr, contractName] = contractAddress.split('.');
@@ -66,7 +74,7 @@ async function mintTokens(amount: number, recipient: string, mintNumber: number)
         network,
         anchorMode: AnchorMode.Any,
         postConditionMode: PostConditionMode.Allow,
-        fee: 300000, // 0.3 STX fee for mainnet
+        fee: 100000, // 0.1 STX fee for mainnet
     };
 
     try {
@@ -100,7 +108,7 @@ async function main() {
     
     const senderAddress = getAddressFromPrivateKey(privateKey);
     const amount = 1000000; // 1 CC token per mint
-    const recipient = adminAddress; // Mint to your address
+    const recipient = recipientAddress; // Mint to recipient address (different from sender)
     
     console.log(`📊 Mint Details:`);
     console.log(`   Network: ${NETWORK_ENV}`);
@@ -110,8 +118,8 @@ async function main() {
     console.log(`   Amount per mint: ${amount / 1000000} CC tokens`);
     console.log(`   Total mints: 5`);
     console.log(`   Total tokens: ${(amount * 5) / 1000000} CC`);
-    console.log(`   Fee per tx: 0.3 STX`);
-    console.log(`   Total fees: 1.5 STX\n`);
+    console.log(`   Fee per tx: 0.1 STX`);
+    console.log(`   Total fees: 0.5 STX\n`);
     
     // Verify sender is the contract owner
     if (senderAddress !== adminAddress) {
@@ -119,6 +127,15 @@ async function main() {
         console.error(`   Expected: ${adminAddress}`);
         console.error(`   Got: ${senderAddress}`);
         console.error(`💡 Make sure PRIVATE_KEY matches ADMIN_ADDRESS`);
+        process.exit(1);
+    }
+    
+    // Verify recipient is different from sender
+    if (recipient === senderAddress) {
+        console.error(`❌ Recipient cannot be the same as sender!`);
+        console.error(`   Sender: ${senderAddress}`);
+        console.error(`   Recipient: ${recipient}`);
+        console.error(`💡 Please set a different DEFAULT_MEMBER_ADDRESS in your .env file`);
         process.exit(1);
     }
     
@@ -145,7 +162,7 @@ async function main() {
     // Summary
     console.log(`\n📊 Final Summary:`);
     console.log(`   ✅ Successful mints: ${successCount}/5`);
-    console.log(`   💰 Total cost: ${successCount * 0.3} STX`);
+    console.log(`   💰 Total cost: ${successCount * 0.1} STX`);
     console.log(`   🪙 Total tokens minted: ${(successCount * amount) / 1000000} CC`);
     
     if (successCount === 5) {

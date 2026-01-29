@@ -14,20 +14,20 @@ export function initializeAppKit() {
         networks,
         projectId,
         metadata: {
-            name: 'WalletX - Multi-Signature Stacks Wallet',
+            name: 'Stacks-Wallet',
             description: 'Secure multi-signature wallet for the Stacks ecosystem',
             url: 'https://walletx.app',
             icons: ['https://walletx.app/icon.png']
         },
         features: {
             email: true,
-            socials: ['google', 'x', 'github', 'discord', 'apple'],
+            socials: ['google', 'x', 'github', 'discord', 'apple', 'farcaster'],
             emailShowWallets: true,
             analytics: true,
-            onramp: true,
-            swaps: true,
+            onramp: true /* Enabled */ /* Enabled */,
+            swaps: true /* Swaps Active */ /* Swaps Active */,
         },
-        themeMode: 'light',
+        themeMode: 'system',
         themeVariables: {
             '--w3m-color-mix': '#FF6B35',
             '--w3m-color-mix-strength': 20,
@@ -35,4 +35,14 @@ export function initializeAppKit() {
             '--w3m-border-radius-master': '8px'
         }
     })
+}
+// Exporting theme variables for custom usage
+export const appKitTheme = {
+    '--w3m-font-family': 'Inter, sans-serif',
+    '--w3m-accent': '#FF6B35'
+}
+// Exporting theme variables for custom usage
+export const appKitTheme = {
+    '--w3m-font-family': 'Inter, sans-serif',
+    '--w3m-accent': '#FF6B35'
 }
