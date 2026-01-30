@@ -910,7 +910,250 @@
   )
 )
 
-;; ===== HELPER FUNCTIONS =====
+;; ===== CIRCUIT BREAKER AND REAL-TIME FEED SYSTEM =====
+
+;; Multi-level circuit breaker activation
+(define-public (check-circuit-breaker (token-id uint) (new-price uint))
+  (let (
+    (current-feed (map-get? enhanced-price-feeds {token-id: token-id}))
+    (current-time (default-to u0 (get-block-info? time (- block-height u1))))
+  )
+    (match current-feed
+      feed (let (
+        (current-price (get current-price feed))
+        (price-change-pct (if (> current-price u0)
+                           (if (> new-price current-price)
+                             (/ (* (- new-price current-price) u10000) current-price)
+                             (/ (* (- current-price new-price) u10000) current-price))
+                           u0))
+      )
+        (if (> price-change-pct u2500) ;; >25% change - Level 4 lockdown
+          (try! (activate-circuit-breaker token-id u4 "extreme-price-deviation" current-time))
+          (if (> price-change-pct u1000) ;; >10% change - Level 2 pause
+            (try! (activate-circuit-breaker token-id u2 "high-price-deviation" current-time))
+            (if (> price-change-pct u500) ;; >5% change - Level 1 warning
+              (try! (activate-circuit-breaker token-id u1 "price-deviation-warning" current-time))
+              (ok true) ;; Normal operation
+            )
+          )
+        )
+      )
+      (ok true) ;; No existing price data
+    )
+  )
+)
+
+;; Activate circuit breaker at specified level
+(define-private (activate-circuit-breaker 
+  (token-id uint) 
+  (level uint) 
+  (reason (string-ascii 64)) 
+  (timestamp uint)
+)
+  (begin
+    ;; Set circuit breaker state
+    (map-set circuit-breaker-state {token-id: token-id} {
+      level: level,
+      triggered-at: timestamp,
+      trigger-reason: reason,
+      recovery-time: (+ timestamp (* level u3600)), ;; Recovery time based on level
+      manual-intervention-required: (>= level u3)
+    })
+    
+    ;; Update price feed status
+    (match (map-get? enhanced-price-feeds {token-id: token-id})
+      feed (map-set enhanced-price-feeds {token-id: token-id}
+        (merge feed {
+          circuit-breaker-status: (if (>= level u3) "halted" 
+                                   (if (>= level u2) "paused" "warning"))
+        }))
+      false ;; No feed to update
+    )
+    
+    ;; Pause system if level 3 or higher
+    (if (>= level u3)
+      (var-set system-paused true)
+      (ok true)
+    )
+    
+    (print {
+      notification: "circuit-breaker-activated",
+      payload: {
+        token-id: token-id,
+        level: level,
+        reason: reason,
+        manual-intervention-required: (>= level u3)
+      }
+    })
+    
+    (ok true)
+  )
+)
+
+;; Get current price with freshness guarantee (max 60 seconds)
+(define-read-only (get-current-price-with-freshness (token-id uint))
+  (match (map-get? enhanced-price-feeds {token-id: token-id})
+    feed (let (
+      (current-time (default-to u0 (get-block-info? time (- block-height u1))))
+      (last-updated (get last-updated feed))
+      (freshness-threshold u60) ;; 60 seconds max staleness
+    )
+      (if (< (- current-time last-updated) freshness-threshold)
+        (ok {
+          price: (get current-price feed),
+          timestamp: last-updated,
+          confidence: (get price-confidence feed),
+          volatility: (get volatility-index feed),
+          circuit-breaker-status: (get circuit-breaker-status feed),
+          freshness: (- current-time last-updated)
+        })
+        (err ERR_STALE_PRICE)
+      )
+    )
+    (err ERR_NOT_FOUND)
+  )
+)
+
+;; Adaptive update frequency based on volatility
+(define-public (adjust-update-frequency (token-id uint))
+  (let (
+    (current-feed (unwrap! (map-get? enhanced-price-feeds {token-id: token-id}) ERR_NOT_FOUND))
+    (volatility (get volatility-index current-feed))
+    (base-frequency u300) ;; 5 minutes base
+  )
+    (let (
+      (new-frequency (if (> volatility u5000) ;; High volatility
+                       u60  ;; 1 minute updates
+                       (if (> volatility u2000) ;; Medium volatility
+                         u180 ;; 3 minute updates
+                         base-frequency))) ;; Normal frequency
+    )
+      (map-set enhanced-price-feeds {token-id: token-id}
+        (merge current-feed {
+          update-frequency: new-frequency
+        }))
+      
+      (print {
+        notification: "update-frequency-adjusted",
+        payload: {
+          token-id: token-id,
+          volatility: volatility,
+          new-frequency: new-frequency
+        }
+      })
+      
+      (ok new-frequency)
+    )
+  )
+)
+
+;; Emergency state preservation
+(define-public (preserve-emergency-state (token-id uint))
+  (let (
+    (current-feed (unwrap! (map-get? enhanced-price-feeds {token-id: token-id}) ERR_NOT_FOUND))
+    (current-time (default-to u0 (get-block-info? time (- block-height u1))))
+  )
+    ;; Store last known good state
+    (map-set price-history {token-id: token-id, timestamp: current-time} {
+      price: (get current-price current-feed),
+      volume: u0, ;; Would get from submissions
+      high: (get current-price current-feed),
+      low: (get current-price current-feed),
+      open: (get current-price current-feed),
+      close: (get current-price current-feed)
+    })
+    
+    (print {
+      notification: "emergency-state-preserved",
+      payload: {
+        token-id: token-id,
+        preserved-price: (get current-price current-feed),
+        timestamp: current-time
+      }
+    })
+    
+    (ok true)
+  )
+)
+
+;; Real-time price feed with comprehensive metadata
+(define-read-only (get-real-time-feed (token-id uint))
+  (match (map-get? enhanced-price-feeds {token-id: token-id})
+    feed (let (
+      (current-time (default-to u0 (get-block-info? time (- block-height u1))))
+      (circuit-state (map-get? circuit-breaker-state {token-id: token-id}))
+    )
+      (ok {
+        current-price: (get current-price feed),
+        twap-1h: (get twap-1h feed),
+        twap-24h: (get twap-24h feed),
+        vwap-24h: (get vwap-24h feed),
+        price-confidence: (get price-confidence feed),
+        volatility-index: (get volatility-index feed),
+        liquidity-score: (get liquidity-score feed),
+        last-updated: (get last-updated feed),
+        update-frequency: (get update-frequency feed),
+        data-quality-score: (get data-quality-score feed),
+        circuit-breaker-status: (get circuit-breaker-status feed),
+        cross-chain-sync-status: (get cross-chain-sync-status feed),
+        freshness: (- current-time (get last-updated feed)),
+        circuit-breaker-level: (match circuit-state
+          state (get level state)
+          u0),
+        system-status: (if (var-get system-paused) "paused" "active")
+      })
+    )
+    (err ERR_NOT_FOUND)
+  )
+)
+
+;; Manual circuit breaker reset (admin only)
+(define-public (reset-circuit-breaker (token-id uint))
+  (begin
+    ;; Would check admin permissions in production
+    (asserts! (is-eq tx-sender CONTRACT_OWNER) ERR_UNAUTHORIZED)
+    
+    ;; Reset circuit breaker state
+    (map-delete circuit-breaker-state {token-id: token-id})
+    
+    ;; Update price feed status
+    (match (map-get? enhanced-price-feeds {token-id: token-id})
+      feed (map-set enhanced-price-feeds {token-id: token-id}
+        (merge feed {
+          circuit-breaker-status: "normal"
+        }))
+      false
+    )
+    
+    ;; Resume system
+    (var-set system-paused false)
+    
+    (print {
+      notification: "circuit-breaker-reset",
+      payload: {
+        token-id: token-id,
+        reset-by: tx-sender
+      }
+    })
+    
+    (ok true)
+  )
+)
+
+;; Check if price update should be allowed
+(define-private (is-price-update-allowed (token-id uint))
+  (let (
+    (circuit-state (map-get? circuit-breaker-state {token-id: token-id}))
+    (current-time (default-to u0 (get-block-info? time (- block-height u1))))
+  )
+    (match circuit-state
+      state (if (get manual-intervention-required state)
+              false ;; Manual intervention required
+              (> current-time (get recovery-time state))) ;; Check if recovery time passed
+      true ;; No circuit breaker active
+    )
+  )
+)
 
 ;; Get submissions for a round (simplified)
 (define-private (get-round-submissions (token-id uint) (round-id uint))
