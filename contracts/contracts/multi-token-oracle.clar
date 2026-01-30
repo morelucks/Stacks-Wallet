@@ -1924,3 +1924,72 @@
 (define-read-only (calculate-correlation-analysis (token-1 uint) (token-2 uint))
   (ok {correlation: 7500, confidence: u90, method: "pearson"})
 )
+;; ===== SECURITY AND ACCESS CONTROL SYSTEM =====
+
+;; Multi-signature operation management
+(define-public (create-multisig-operation (operation-type (string-ascii 32)) (required-sigs uint))
+  (let ((op-id (var-get next-operation-id)))
+    (map-set admin-operations {operation-id: op-id} {
+      operation-type: operation-type, required-signatures: required-sigs,
+      current-signatures: u0, signers: (list), execution-time: u0, executed: false
+    })
+    (var-set next-operation-id (+ op-id u1))
+    (ok op-id)
+  )
+)
+
+;; Sign multisig operation
+(define-public (sign-operation (operation-id uint))
+  (let ((op (unwrap! (map-get? admin-operations {operation-id: operation-id}) ERR_NOT_FOUND)))
+    (map-set admin-operations {operation-id: operation-id}
+      (merge op {current-signatures: (+ (get current-signatures op) u1)}))
+    (ok true)
+  )
+)
+
+;; Rate limiting and anomaly detection
+(define-map rate-limits {user: principal} {requests: uint, window-start: uint, blocked: bool})
+
+(define-public (check-rate-limit (user principal))
+  (let ((current-time (default-to u0 (get-block-info? time (- block-height u1)))))
+    (match (map-get? rate-limits {user: user})
+      limit (if (> (get requests limit) u100) ;; 100 requests per window
+              (begin (map-set rate-limits {user: user} (merge limit {blocked: true})) (err ERR_RATE_LIMIT_EXCEEDED))
+              (ok true))
+      (ok true)
+    )
+  )
+)
+
+;; Emergency pause system
+(define-public (emergency-pause (reason (string-ascii 64)))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT_OWNER) ERR_UNAUTHORIZED)
+    (var-set system-paused true)
+    (print {notification: "emergency-pause", reason: reason})
+    (ok true)
+  )
+)
+
+;; Provider suspension
+(define-public (suspend-provider (oracle-id uint) (reason (string-ascii 64)))
+  (let ((oracle (unwrap! (map-get? oracle-providers {oracle-id: oracle-id}) ERR_NOT_FOUND)))
+    (map-set oracle-providers {oracle-id: oracle-id} (merge oracle {active: false}))
+    (print {notification: "provider-suspended", oracle-id: oracle-id, reason: reason})
+    (ok true)
+  )
+)
+
+;; Audit logging
+(define-map audit-logs {log-id: uint} {event: (string-ascii 64), user: principal, timestamp: uint, details: (string-ascii 128)})
+(define-data-var next-log-id uint u1)
+
+(define-private (log-security-event (event (string-ascii 64)) (details (string-ascii 128)))
+  (let ((log-id (var-get next-log-id)))
+    (map-set audit-logs {log-id: log-id} {
+      event: event, user: tx-sender, 
+      timestamp: (default-to u0 (get-block-info? time (- block-height u1))), details: details
+    })
+    (var-set next-log-id (+ log-id u1))
+  )
+)
