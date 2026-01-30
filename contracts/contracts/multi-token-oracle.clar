@@ -1993,3 +1993,71 @@
     (var-set next-log-id (+ log-id u1))
   )
 )
+;; ===== FLEXIBLE CONFIGURATION AND INTEGRATION SYSTEM =====
+
+;; Protocol-specific configurations
+(define-map protocol-configs {protocol: principal, token-id: uint} {
+  aggregation-method: (string-ascii 16), update-frequency: uint, deviation-threshold: uint,
+  min-oracles: uint, access-level: uint, callback-enabled: bool
+})
+
+;; Configure protocol-specific settings
+(define-public (configure-protocol (protocol principal) (token-id uint) (config {aggregation-method: (string-ascii 16), update-frequency: uint, deviation-threshold: uint, min-oracles: uint}))
+  (begin
+    (map-set protocol-configs {protocol: protocol, token-id: token-id} {
+      aggregation-method: (get aggregation-method config), update-frequency: (get update-frequency config),
+      deviation-threshold: (get deviation-threshold config), min-oracles: (get min-oracles config),
+      access-level: u1, callback-enabled: true
+    })
+    (ok true)
+  )
+)
+
+;; Callback registration for price updates
+(define-map price-callbacks {protocol: principal, token-id: uint} {callback-url: (string-ascii 128), enabled: bool, last-called: uint})
+
+(define-public (register-callback (protocol principal) (token-id uint) (callback-url (string-ascii 128)))
+  (begin
+    (map-set price-callbacks {protocol: protocol, token-id: token-id} {
+      callback-url: callback-url, enabled: true, last-called: u0
+    })
+    (ok true)
+  )
+)
+
+;; Subscription management
+(define-map subscriptions {protocol: principal} {tier: (string-ascii 16), usage-count: uint, usage-limit: uint, expires-at: uint, active: bool})
+
+(define-public (create-subscription (protocol principal) (tier (string-ascii 16)) (usage-limit uint) (duration uint))
+  (let ((current-time (default-to u0 (get-block-info? time (- block-height u1)))))
+    (map-set subscriptions {protocol: protocol} {
+      tier: tier, usage-count: u0, usage-limit: usage-limit,
+      expires-at: (+ current-time duration), active: true
+    })
+    (ok true)
+  )
+)
+
+;; Track usage for billing
+(define-public (track-usage (protocol principal))
+  (match (map-get? subscriptions {protocol: protocol})
+    sub (if (< (get usage-count sub) (get usage-limit sub))
+          (begin
+            (map-set subscriptions {protocol: protocol} (merge sub {usage-count: (+ (get usage-count sub) u1)}))
+            (ok true)
+          )
+          (err ERR_RATE_LIMIT_EXCEEDED))
+    (err ERR_NOT_FOUND)
+  )
+)
+
+;; Custom aggregation method implementation
+(define-public (set-custom-aggregation (token-id uint) (method (string-ascii 16)) (parameters (string-ascii 128)))
+  (begin
+    (asserts! (or (is-eq method "median") (or (is-eq method "mean") (or (is-eq method "mode") (is-eq method "weighted")))) ERR_INVALID_PARAMETER)
+    (let ((config (unwrap! (map-get? oracle-configs {token-id: token-id}) ERR_NOT_FOUND)))
+      (map-set oracle-configs {token-id: token-id} (merge config {aggregation-method: method}))
+    )
+    (ok true)
+  )
+)
