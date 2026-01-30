@@ -213,7 +213,7 @@
 - [ ] 11. Checkpoint - Ensure all advanced features tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [-] 12. Implement cross-chain oracle capabilities
+- [x] 12. Implement cross-chain oracle capabilities
   - Create cross-chain price data synchronization
   - Implement secure cross-chain message passing
   - Add chain independence with eventual consistency
@@ -241,7 +241,7 @@
   - **Property 39: Bridge operation integrity**
   - **Validates: Requirements 9.5**
 
-- [ ] 13. Implement decentralized governance system
+- [-] 13. Implement decentralized governance system
   - Create governance proposal system for parameter updates
   - Implement weighted voting based on stake and reputation
   - Add time-locked execution for approved proposals

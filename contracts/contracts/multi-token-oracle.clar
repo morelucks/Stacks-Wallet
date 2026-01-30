@@ -2238,3 +2238,131 @@
 (define-private (abs-diff (a uint) (b uint))
   (if (> a b) (- a b) (- b a))
 )
+;; ===== DECENTRALIZED GOVERNANCE SYSTEM =====
+
+;; Create governance proposal
+(define-public (create-proposal (proposal-type (string-ascii 32)) (description (string-utf8 256)) (parameters (string-utf8 512)) (voting-duration uint))
+  (let (
+    (proposal-id (var-get next-proposal-id))
+    (current-time (default-to u0 (get-block-info? time (- block-height u1))))
+  )
+    (map-set governance-proposals {proposal-id: proposal-id} {
+      proposer: tx-sender, proposal-type: proposal-type, description: description, parameters: parameters,
+      voting-start: current-time, voting-end: (+ current-time voting-duration),
+      votes-for: u0, votes-against: u0, execution-time: u0, status: "active"
+    })
+    (var-set next-proposal-id (+ proposal-id u1))
+    (print {notification: "proposal-created", proposal-id: proposal-id, proposer: tx-sender})
+    (ok proposal-id)
+  )
+)
+
+;; Vote on proposal with weighted voting
+(define-public (vote-on-proposal (proposal-id uint) (vote-for bool))
+  (let (
+    (proposal (unwrap! (map-get? governance-proposals {proposal-id: proposal-id}) ERR_NOT_FOUND))
+    (current-time (default-to u0 (get-block-info? time (- block-height u1))))
+    (voter-weight (calculate-voting-weight tx-sender))
+  )
+    (begin
+      ;; Validation
+      (asserts! (< current-time (get voting-end proposal)) ERR_VOTING_PERIOD_EXPIRED)
+      (asserts! (is-eq (get status proposal) "active") ERR_INVALID_PARAMETER)
+      
+      ;; Record vote
+      (map-set proposal-votes {proposal-id: proposal-id, voter: tx-sender} {
+        vote-for: vote-for, weight: voter-weight, timestamp: current-time
+      })
+      
+      ;; Update proposal vote counts
+      (map-set governance-proposals {proposal-id: proposal-id}
+        (merge proposal {
+          votes-for: (if vote-for (+ (get votes-for proposal) voter-weight) (get votes-for proposal)),
+          votes-against: (if vote-for (get votes-against proposal) (+ (get votes-against proposal) voter-weight))
+        }))
+      
+      (print {notification: "vote-cast", proposal-id: proposal-id, voter: tx-sender, vote-for: vote-for, weight: voter-weight})
+      (ok true)
+    )
+  )
+)
+
+;; Proposal voting records
+(define-map proposal-votes {proposal-id: uint, voter: principal} {vote-for: bool, weight: uint, timestamp: uint})
+
+;; Calculate voting weight based on stake and reputation
+(define-private (calculate-voting-weight (voter principal))
+  ;; Simplified - would calculate based on actual stake and reputation
+  u100 ;; Base voting weight
+)
+
+;; Execute approved proposal with time lock
+(define-public (execute-proposal (proposal-id uint))
+  (let (
+    (proposal (unwrap! (map-get? governance-proposals {proposal-id: proposal-id}) ERR_NOT_FOUND))
+    (current-time (default-to u0 (get-block-info? time (- block-height u1))))
+    (time-lock-period u86400) ;; 24 hour time lock
+  )
+    (begin
+      ;; Validation
+      (asserts! (> current-time (get voting-end proposal)) ERR_VOTING_PERIOD_EXPIRED)
+      (asserts! (> (get votes-for proposal) (get votes-against proposal)) ERR_INVALID_PARAMETER)
+      (asserts! (is-eq (get status proposal) "approved") ERR_INVALID_PARAMETER)
+      (asserts! (> current-time (+ (get voting-end proposal) time-lock-period)) ERR_EXECUTION_TIME_LOCKED)
+      
+      ;; Execute proposal
+      (map-set governance-proposals {proposal-id: proposal-id}
+        (merge proposal {status: "executed", execution-time: current-time}))
+      
+      ;; Apply proposal changes (simplified)
+      (try! (apply-proposal-changes proposal-id (get proposal-type proposal) (get parameters proposal)))
+      
+      (print {notification: "proposal-executed", proposal-id: proposal-id, execution-time: current-time})
+      (ok true)
+    )
+  )
+)
+
+;; Apply proposal changes
+(define-private (apply-proposal-changes (proposal-id uint) (proposal-type (string-ascii 32)) (parameters (string-utf8 512)))
+  ;; Simplified - would implement actual parameter changes based on proposal type
+  (ok true)
+)
+
+;; Dispute resolution system
+(define-public (submit-dispute (proposal-id uint) (dispute-reason (string-utf8 256)) (evidence (string-utf8 512)))
+  (let ((dispute-id (+ (* proposal-id u1000) (default-to u0 (get-block-info? time (- block-height u1))))))
+    (map-set governance-disputes {dispute-id: dispute-id} {
+      proposal-id: proposal-id, disputer: tx-sender, dispute-reason: dispute-reason,
+      evidence: evidence, submitted-at: (default-to u0 (get-block-info? time (- block-height u1))),
+      status: "pending", resolution: ""
+    })
+    (print {notification: "dispute-submitted", dispute-id: dispute-id, proposal-id: proposal-id})
+    (ok dispute-id)
+  )
+)
+
+;; Governance disputes
+(define-map governance-disputes {dispute-id: uint} {
+  proposal-id: uint, disputer: principal, dispute-reason: (string-utf8 256),
+  evidence: (string-utf8 512), submitted-at: uint, status: (string-ascii 16), resolution: (string-utf8 256)
+})
+
+;; Versioned upgrades with backward compatibility
+(define-public (propose-system-upgrade (version (string-ascii 16)) (upgrade-hash (buff 32)) (compatibility-info (string-utf8 256)))
+  (let ((upgrade-id (var-get next-proposal-id)))
+    (map-set system-upgrades {upgrade-id: upgrade-id} {
+      version: version, upgrade-hash: upgrade-hash, compatibility-info: compatibility-info,
+      proposed-at: (default-to u0 (get-block-info? time (- block-height u1))),
+      status: "proposed", activation-time: u0
+    })
+    (print {notification: "upgrade-proposed", upgrade-id: upgrade-id, version: version})
+    (ok upgrade-id)
+  )
+)
+
+;; System upgrades tracking
+(define-map system-upgrades {upgrade-id: uint} {
+  version: (string-ascii 16), upgrade-hash: (buff 32), compatibility-info: (string-utf8 256),
+  proposed-at: uint, status: (string-ascii 16), activation-time: uint
+})
