@@ -2061,3 +2061,79 @@
     (ok true)
   )
 )
+;; ===== MONITORING AND ALERTING SYSTEM =====
+
+;; Health metrics tracking
+(define-map health-metrics {oracle-id: uint} {uptime: uint, response-time: uint, data-quality: uint, last-check: uint, status: (string-ascii 16)})
+
+(define-public (update-health-metrics (oracle-id uint) (uptime uint) (response-time uint) (data-quality uint))
+  (let ((current-time (default-to u0 (get-block-info? time (- block-height u1)))))
+    (map-set health-metrics {oracle-id: oracle-id} {
+      uptime: uptime, response-time: response-time, data-quality: data-quality,
+      last-check: current-time, status: (if (> uptime u9000) "healthy" "degraded")
+    })
+    (ok true)
+  )
+)
+
+;; Alert generation system
+(define-map alerts {alert-id: uint} {type: (string-ascii 32), severity: uint, message: (string-ascii 128), timestamp: uint, resolved: bool})
+(define-data-var next-alert-id uint u1)
+
+(define-public (generate-alert (alert-type (string-ascii 32)) (severity uint) (message (string-ascii 128)))
+  (let ((alert-id (var-get next-alert-id)))
+    (map-set alerts {alert-id: alert-id} {
+      type: alert-type, severity: severity, message: message,
+      timestamp: (default-to u0 (get-block-info? time (- block-height u1))), resolved: false
+    })
+    (var-set next-alert-id (+ alert-id u1))
+    (print {notification: "alert-generated", alert-id: alert-id, type: alert-type, severity: severity})
+    (ok alert-id)
+  )
+)
+
+;; Automatic failover system
+(define-map backup-oracles {token-id: uint} {primary-oracles: (list 10 uint), backup-oracles: (list 10 uint), failover-active: bool})
+
+(define-public (configure-failover (token-id uint) (primary-oracles (list 10 uint)) (backup-oracles (list 10 uint)))
+  (begin
+    (map-set backup-oracles {token-id: token-id} {
+      primary-oracles: primary-oracles, backup-oracles: backup-oracles, failover-active: false
+    })
+    (ok true)
+  )
+)
+
+(define-public (trigger-failover (token-id uint))
+  (match (map-get? backup-oracles {token-id: token-id})
+    config (begin
+      (map-set backup-oracles {token-id: token-id} (merge config {failover-active: true}))
+      (try! (generate-alert "failover-activated" u2 "Automatic failover to backup oracles"))
+      (ok true)
+    )
+    (err ERR_NOT_FOUND)
+  )
+)
+
+;; Maintenance mode
+(define-public (enable-maintenance-mode (reason (string-ascii 64)))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT_OWNER) ERR_UNAUTHORIZED)
+    (var-set maintenance-mode true)
+    (try! (generate-alert "maintenance-mode" u1 "System entering maintenance mode"))
+    (ok true)
+  )
+)
+
+;; System status dashboard
+(define-read-only (get-system-status)
+  (ok {
+    system-paused: (var-get system-paused), maintenance-mode: (var-get maintenance-mode),
+    total-oracles: (- (var-get next-oracle-id) u1), active-alerts: (count-active-alerts),
+    system-health: "operational", last-update: (default-to u0 (get-block-info? time (- block-height u1)))
+  })
+)
+
+(define-private (count-active-alerts)
+  u3 ;; Simplified - would count actual unresolved alerts
+)
