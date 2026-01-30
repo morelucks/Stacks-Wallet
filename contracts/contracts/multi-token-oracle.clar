@@ -18,6 +18,31 @@
 (define-constant ERR_INSUFFICIENT_ORACLES (err u403))
 (define-constant ERR_PRICE_DEVIATION (err u405))
 
+;; Enhanced error constants
+(define-constant ERR_INVALID_DATA_FORMAT (err u406))
+(define-constant ERR_OUT_OF_RANGE (err u407))
+(define-constant ERR_STALE_TIMESTAMP (err u408))
+(define-constant ERR_INSUFFICIENT_CONFIDENCE (err u409))
+(define-constant ERR_DUPLICATE_SUBMISSION (err u410))
+(define-constant ERR_HIGH_VARIANCE (err u411))
+(define-constant ERR_OUTLIER_DETECTED (err u412))
+(define-constant ERR_AGGREGATION_FAILED (err u413))
+(define-constant ERR_CONFIDENCE_TOO_LOW (err u414))
+(define-constant ERR_SIGNATURE_INVALID (err u415))
+(define-constant ERR_RATE_LIMIT_EXCEEDED (err u416))
+(define-constant ERR_SUSPICIOUS_ACTIVITY (err u417))
+(define-constant ERR_CIRCUIT_BREAKER_ACTIVE (err u418))
+(define-constant ERR_CHAIN_DISCONNECTED (err u419))
+(define-constant ERR_BRIDGE_VALIDATION_FAILED (err u420))
+(define-constant ERR_SYNC_CONFLICT (err u421))
+(define-constant ERR_REPLAY_ATTACK_DETECTED (err u422))
+(define-constant ERR_CHAIN_PRIORITY_VIOLATION (err u423))
+(define-constant ERR_PROPOSAL_INVALID (err u424))
+(define-constant ERR_VOTING_PERIOD_EXPIRED (err u425))
+(define-constant ERR_INSUFFICIENT_STAKE (err u426))
+(define-constant ERR_EXECUTION_TIME_LOCKED (err u427))
+(define-constant ERR_APPEAL_PERIOD_EXPIRED (err u428))
+
 ;; Oracle types
 (define-constant ORACLE_PRICE_FEED u1)
 (define-constant ORACLE_VOLUME_FEED u2)
@@ -83,14 +108,107 @@
   active: bool
 })
 
-;; Historical price data
-(define-map price-history {token-id: uint, timestamp: uint} {
+;; Enhanced Price Feed Model
+(define-map enhanced-price-feeds {token-id: uint} {
+  current-price: uint,
+  twap-1h: uint,
+  twap-24h: uint,
+  vwap-24h: uint,
+  price-confidence: uint,
+  volatility-index: uint,
+  liquidity-score: uint,
+  last-updated: uint,
+  update-frequency: uint,
+  data-quality-score: uint,
+  circuit-breaker-status: (string-ascii 16),
+  cross-chain-sync-status: (string-ascii 16)
+})
+
+;; Oracle Reputation Model
+(define-map oracle-reputation {oracle-id: uint} {
+  accuracy-score: uint,      ;; 0-1000 based on historical accuracy
+  timeliness-score: uint,    ;; 0-1000 based on submission timing
+  consistency-score: uint,   ;; 0-1000 based on data consistency
+  stake-weight: uint,        ;; Weighted by staked amount
+  penalty-points: uint,      ;; Accumulated penalties
+  total-score: uint,         ;; Composite reputation score
+  last-updated: uint,
+  performance-history: (list 100 uint) ;; Rolling performance window
+})
+
+;; Historical Analytics Model
+(define-map price-analytics {token-id: uint, period: uint} {
+  open-price: uint,
+  high-price: uint,
+  low-price: uint,
+  close-price: uint,
+  volume: uint,
+  volatility: uint,
+  correlation-btc: int,
+  correlation-eth: int,
+  market-cap: uint,
+  liquidity-depth: uint,
+  price-impact: uint,
+  data-points: uint
+})
+
+;; Cross-Chain Synchronization Model
+(define-map cross-chain-state {chain-id: uint, token-id: uint} {
+  local-price: uint,
+  remote-price: uint,
+  sync-timestamp: uint,
+  sync-status: (string-ascii 16),
+  conflict-resolution: (string-ascii 16),
+  bridge-hash: (buff 32),
+  validation-count: uint
+})
+
+;; Governance Model
+(define-map governance-proposals {proposal-id: uint} {
+  proposer: principal,
+  proposal-type: (string-ascii 32),
+  description: (string-utf8 256),
+  parameters: (string-utf8 512),
+  voting-start: uint,
+  voting-end: uint,
+  votes-for: uint,
+  votes-against: uint,
+  execution-time: uint,
+  status: (string-ascii 16)
+})
+
+;; Multi-Signature Controls
+(define-map admin-operations {operation-id: uint} {
+  operation-type: (string-ascii 32),
+  required-signatures: uint,
+  current-signatures: uint,
+  signers: (list 10 principal),
+  execution-time: uint,
+  executed: bool
+})
+
+;; Circuit Breaker State
+(define-map circuit-breaker-state {token-id: uint} {
+  level: uint,               ;; 0=normal, 1=warning, 2=pause, 3=halt, 4=lockdown
+  triggered-at: uint,
+  trigger-reason: (string-ascii 64),
+  recovery-time: uint,
+  manual-intervention-required: bool
+})
+
+;; Enhanced Data Submissions
+(define-map enhanced-submissions {token-id: uint, oracle-id: uint, round-id: uint} {
   price: uint,
   volume: uint,
-  high: uint,
-  low: uint,
-  open: uint,
-  close: uint
+  market-cap: uint,
+  liquidity: uint,
+  volatility: uint,
+  confidence: uint,
+  data-sources: (list 10 (string-ascii 32)),
+  timestamp: uint,
+  signature: (buff 65),
+  validated: bool,
+  outlier-score: uint
 })
 
 ;; Oracle rewards
@@ -101,10 +219,14 @@
   last-claim: uint
 })
 
-;; Counters
+;; Counters and state variables
 (define-data-var next-oracle-id uint u1)
 (define-data-var next-round-id uint u1)
+(define-data-var next-proposal-id uint u1)
+(define-data-var next-operation-id uint u1)
 (define-data-var total-oracle-rewards uint u0)
+(define-data-var system-paused bool false)
+(define-data-var maintenance-mode bool false)
 
 ;; ===== ORACLE PROVIDER FUNCTIONS =====
 
