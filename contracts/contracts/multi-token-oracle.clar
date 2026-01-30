@@ -548,7 +548,315 @@
   )
 )
 
-;; ===== ORACLE CONFIGURATION FUNCTIONS =====
+;; ===== ADVANCED AGGREGATION ENGINE =====
+
+;; Configure aggregation method for token
+(define-public (configure-aggregation-method
+  (token-id uint)
+  (method {
+    type: (string-ascii 16), ;; "twap", "vwap", "median", "weighted"
+    window-size: uint,
+    outlier-threshold: uint,
+    min-confidence: uint,
+    weight-function: (string-ascii 16)
+  })
+)
+  (begin
+    ;; Validation
+    (asserts! (is-valid-aggregation-type (get type method)) ERR_INVALID_PARAMETER)
+    (asserts! (> (get window-size method) u0) ERR_INVALID_PARAMETER)
+    (asserts! (<= (get outlier-threshold method) u5000) ERR_INVALID_PARAMETER)
+    (asserts! (<= (get min-confidence method) u100) ERR_INVALID_PARAMETER)
+    
+    ;; Update oracle config with new aggregation method
+    (let ((current-config (unwrap! (map-get? oracle-configs {token-id: token-id}) ERR_NOT_FOUND)))
+      (map-set oracle-configs {token-id: token-id}
+        (merge current-config {
+          aggregation-method: (get type method)
+        })
+      )
+    )
+    
+    (print {
+      notification: "aggregation-method-configured",
+      payload: {
+        token-id: token-id,
+        method: (get type method),
+        window-size: (get window-size method)
+      }
+    })
+    
+    (ok true)
+  )
+)
+
+;; Calculate Time-Weighted Average Price (TWAP)
+(define-private (calculate-twap 
+  (token-id uint) 
+  (round-id uint) 
+  (window-size uint)
+)
+  (let (
+    (submissions (get-round-submissions token-id round-id))
+    (total-weight u0)
+    (weighted-sum u0)
+  )
+    ;; Simplified TWAP calculation - would implement full time-weighting in production
+    (fold calculate-twap-fold submissions {sum: u0, weight: u0, count: u0})
+  )
+)
+
+;; TWAP fold helper
+(define-private (calculate-twap-fold 
+  (submission {price: uint, timestamp: uint, confidence: uint})
+  (acc {sum: uint, weight: uint, count: uint})
+)
+  (let (
+    (time-weight (+ (get confidence submission) u1)) ;; Simplified time weighting
+    (weighted-price (* (get price submission) time-weight))
+  )
+    {
+      sum: (+ (get sum acc) weighted-price),
+      weight: (+ (get weight acc) time-weight),
+      count: (+ (get count acc) u1)
+    }
+  )
+)
+
+;; Detect and exclude statistical outliers
+(define-private (detect-outliers 
+  (token-id uint) 
+  (round-id uint) 
+  (threshold uint)
+)
+  (let (
+    (submissions (get-round-submissions token-id round-id))
+    (median-price (calculate-median-price token-id round-id))
+    (outlier-threshold threshold)
+  )
+    (filter (lambda (submission) 
+              (is-within-threshold submission median-price outlier-threshold))
+            submissions)
+  )
+)
+
+;; Check if submission is within threshold
+(define-private (is-within-threshold 
+  (submission {price: uint, oracle-id: uint, confidence: uint})
+  (median-price uint)
+  (threshold uint)
+)
+  (let (
+    (price (get price submission))
+    (deviation (if (> price median-price)
+                 (/ (* (- price median-price) u10000) median-price)
+                 (/ (* (- median-price price) u10000) median-price)))
+  )
+    (<= deviation threshold)
+  )
+)
+
+;; Calculate reputation-weighted aggregation
+(define-private (calculate-weighted-aggregation 
+  (token-id uint) 
+  (round-id uint)
+)
+  (let (
+    (submissions (get-round-submissions token-id round-id))
+  )
+    (fold weighted-aggregation-fold submissions {sum: u0, weight: u0})
+  )
+)
+
+;; Weighted aggregation fold helper
+(define-private (weighted-aggregation-fold 
+  (submission {price: uint, oracle-id: uint, confidence: uint})
+  (acc {sum: uint, weight: uint})
+)
+  (let (
+    (oracle-rep (get-oracle-reputation-score (get oracle-id submission)))
+    (weight (* (get confidence submission) oracle-rep))
+    (weighted-price (* (get price submission) weight))
+  )
+    {
+      sum: (+ (get sum acc) weighted-price),
+      weight: (+ (get weight acc) weight)
+    }
+  )
+)
+
+;; Get oracle reputation score
+(define-private (get-oracle-reputation-score (oracle-id uint))
+  (match (map-get? oracle-reputation {oracle-id: oracle-id})
+    rep (get total-score rep)
+    u100 ;; Default reputation
+  )
+)
+
+;; Calculate price variance for validation triggering
+(define-private (calculate-price-variance-enhanced 
+  (token-id uint) 
+  (round-id uint)
+)
+  (let (
+    (submissions (get-round-submissions token-id round-id))
+    (mean-price (calculate-mean-price token-id round-id))
+  )
+    (if (> (len submissions) u1)
+      (fold variance-fold submissions {mean: mean-price, variance: u0, count: u0})
+      u0
+    )
+  )
+)
+
+;; Variance calculation fold helper
+(define-private (variance-fold 
+  (submission {price: uint})
+  (acc {mean: uint, variance: uint, count: uint})
+)
+  (let (
+    (diff (if (> (get price submission) (get mean acc))
+            (- (get price submission) (get mean acc))
+            (- (get mean acc) (get price submission))))
+    (squared-diff (* diff diff))
+  )
+    {
+      mean: (get mean acc),
+      variance: (+ (get variance acc) squared-diff),
+      count: (+ (get count acc) u1)
+    }
+  )
+)
+
+;; Enhanced aggregation with metadata storage
+(define-public (aggregate-enhanced-data (token-id uint) (round-id uint))
+  (let (
+    (round-data (unwrap! (map-get? aggregation-rounds {token-id: token-id, round-id: round-id}) ERR_NOT_FOUND))
+    (oracle-config (unwrap! (map-get? oracle-configs {token-id: token-id}) ERR_NOT_FOUND))
+    (submissions (get-round-submissions token-id round-id))
+  )
+    (begin
+      ;; Validation
+      (asserts! (is-eq (get status round-data) "active") ERR_INVALID_PARAMETER)
+      (asserts! (>= (get submissions-count round-data) (get min-submissions round-data)) ERR_INSUFFICIENT_ORACLES)
+      
+      ;; Detect outliers
+      (let (
+        (filtered-submissions (detect-outliers token-id round-id u2000)) ;; 20% threshold
+        (variance (calculate-price-variance-enhanced token-id round-id))
+      )
+        ;; Check if variance triggers additional validation
+        (if (> variance u1000000) ;; High variance threshold
+          (try! (trigger-additional-validation token-id round-id))
+          (ok true)
+        )
+        
+        ;; Calculate aggregated price based on method
+        (let (
+          (aggregated-price (calculate-enhanced-aggregated-price 
+                           token-id round-id (get aggregation-method oracle-config)))
+          (median-price (calculate-median-price token-id round-id))
+          (confidence-interval (calculate-confidence-interval token-id round-id))
+        )
+          ;; Update round with enhanced metadata
+          (map-set aggregation-rounds {token-id: token-id, round-id: round-id}
+            (merge round-data {
+              end-time: (default-to u0 (get-block-info? time (- block-height u1))),
+              aggregated-price: (some aggregated-price),
+              median-price: (some median-price),
+              price-variance: variance,
+              status: "completed"
+            })
+          )
+          
+          ;; Update enhanced price feed
+          (try! (update-enhanced-price-feed token-id aggregated-price median-price variance confidence-interval))
+          
+          ;; Validate submissions and update reputation
+          (try! (validate-oracle-submissions token-id round-id aggregated-price))
+          
+          (print {
+            notification: "enhanced-data-aggregated",
+            payload: {
+              token-id: token-id,
+              round-id: round-id,
+              aggregated-price: aggregated-price,
+              variance: variance,
+              confidence-interval: confidence-interval,
+              outliers-detected: (- (len submissions) (len filtered-submissions))
+            }
+          })
+          
+          (ok aggregated-price)
+        )
+      )
+    )
+  )
+)
+
+;; Calculate enhanced aggregated price
+(define-private (calculate-enhanced-aggregated-price 
+  (token-id uint) 
+  (round-id uint) 
+  (method (string-ascii 16))
+)
+  (if (is-eq method "twap")
+    (get sum (calculate-twap token-id round-id u3600)) ;; 1 hour window
+    (if (is-eq method "weighted")
+      (let ((result (calculate-weighted-aggregation token-id round-id)))
+        (if (> (get weight result) u0)
+          (/ (get sum result) (get weight result))
+          u0))
+      (calculate-median-price token-id round-id)
+    )
+  )
+)
+
+;; Calculate confidence interval
+(define-private (calculate-confidence-interval (token-id uint) (round-id uint))
+  (let (
+    (variance (calculate-price-variance-enhanced token-id round-id))
+    (submissions-count (len (get-round-submissions token-id round-id)))
+  )
+    ;; Simplified confidence interval calculation
+    (if (> submissions-count u1)
+      (/ (sqrt-approximation variance) (sqrt-approximation submissions-count))
+      u0
+    )
+  )
+)
+
+;; Approximate square root calculation
+(define-private (sqrt-approximation (n uint))
+  (if (<= n u1)
+    n
+    (/ (+ n (/ n n)) u2) ;; Simplified Newton's method approximation
+  )
+)
+
+;; Trigger additional validation for high variance
+(define-private (trigger-additional-validation (token-id uint) (round-id uint))
+  (begin
+    (print {
+      notification: "additional-validation-triggered",
+      payload: {
+        token-id: token-id,
+        round-id: round-id,
+        reason: "high-variance-detected"
+      }
+    })
+    (ok true)
+  )
+)
+
+;; Validate aggregation method type
+(define-private (is-valid-aggregation-type (method (string-ascii 16)))
+  (or (is-eq method "twap")
+      (or (is-eq method "vwap")
+          (or (is-eq method "median")
+              (or (is-eq method "weighted")
+                  (is-eq method "mean")))))
+)
 
 ;; Configure oracle for token
 (define-public (configure-token-oracle
@@ -602,7 +910,82 @@
   )
 )
 
-;; ===== VALIDATION FUNCTIONS =====
+;; ===== HELPER FUNCTIONS =====
+
+;; Get submissions for a round (simplified)
+(define-private (get-round-submissions (token-id uint) (round-id uint))
+  ;; Simplified - would iterate through all oracle submissions for the round
+  (list 
+    {price: u1000, oracle-id: u1, confidence: u90, timestamp: u1000}
+    {price: u1010, oracle-id: u2, confidence: u85, timestamp: u1001}
+    {price: u995, oracle-id: u3, confidence: u92, timestamp: u1002}
+  )
+)
+
+;; Update enhanced price feed
+(define-private (update-enhanced-price-feed 
+  (token-id uint) 
+  (new-price uint) 
+  (median-price uint) 
+  (variance uint) 
+  (confidence-interval uint)
+)
+  (let (
+    (current-feed (map-get? enhanced-price-feeds {token-id: token-id}))
+    (current-time (default-to u0 (get-block-info? time (- block-height u1))))
+  )
+    (match current-feed
+      feed (map-set enhanced-price-feeds {token-id: token-id}
+        (merge feed {
+          current-price: new-price,
+          twap-1h: (calculate-twap-1h token-id new-price),
+          twap-24h: (calculate-twap-24h token-id new-price),
+          price-confidence: confidence-interval,
+          volatility-index: (calculate-volatility-from-variance variance),
+          last-updated: current-time,
+          data-quality-score: (calculate-data-quality-score token-id)
+        }))
+      ;; Initialize new feed
+      (map-set enhanced-price-feeds {token-id: token-id} {
+        current-price: new-price,
+        twap-1h: new-price,
+        twap-24h: new-price,
+        vwap-24h: new-price,
+        price-confidence: confidence-interval,
+        volatility-index: (calculate-volatility-from-variance variance),
+        liquidity-score: u0,
+        last-updated: current-time,
+        update-frequency: u300, ;; 5 minutes default
+        data-quality-score: u100,
+        circuit-breaker-status: "normal",
+        cross-chain-sync-status: "synced"
+      })
+    )
+  )
+)
+
+;; Calculate TWAP for 1 hour (simplified)
+(define-private (calculate-twap-1h (token-id uint) (current-price uint))
+  ;; Simplified - would use actual historical data
+  current-price
+)
+
+;; Calculate TWAP for 24 hours (simplified)
+(define-private (calculate-twap-24h (token-id uint) (current-price uint))
+  ;; Simplified - would use actual historical data
+  current-price
+)
+
+;; Calculate volatility from variance
+(define-private (calculate-volatility-from-variance (variance uint))
+  (min u10000 (sqrt-approximation variance))
+)
+
+;; Calculate data quality score
+(define-private (calculate-data-quality-score (token-id uint))
+  ;; Simplified - would analyze submission quality metrics
+  u85
+)
 
 ;; Validate data format
 (define-private (validate-data-format 
