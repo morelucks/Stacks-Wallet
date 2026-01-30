@@ -241,7 +241,7 @@
   - **Property 39: Bridge operation integrity**
   - **Validates: Requirements 9.5**
 
-- [-] 13. Implement decentralized governance system
+- [x] 13. Implement decentralized governance system
   - Create governance proposal system for parameter updates
   - Implement weighted voting based on stake and reputation
   - Add time-locked execution for approved proposals
@@ -269,7 +269,7 @@
   - **Property 44: Backward compatibility preservation**
   - **Validates: Requirements 10.5**
 
-- [ ] 14. Implement integration and deployment utilities
+- [-] 14. Implement integration and deployment utilities
   - Create deployment scripts for oracle contract upgrades
   - Implement migration utilities for existing data
   - Add integration helpers for external protocols
