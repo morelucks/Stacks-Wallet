@@ -1595,3 +1595,304 @@
     confidence: u85 ;; Confidence level
   })
 )
+
+;; ===== REPUTATION ENGINE AND REWARD SYSTEM =====
+
+;; Update oracle reputation based on submission accuracy
+(define-public (update-oracle-reputation 
+  (oracle-id uint) 
+  (accuracy-delta int) 
+  (timeliness-delta int) 
+  (consistency-delta int)
+)
+  (let (
+    (current-rep (default-to 
+      {accuracy-score: u500, timeliness-score: u500, consistency-score: u500, 
+       stake-weight: u100, penalty-points: u0, total-score: u500, 
+       last-updated: u0, performance-history: (list)}
+      (map-get? oracle-reputation {oracle-id: oracle-id})))
+    (current-time (default-to u0 (get-block-info? time (- block-height u1))))
+  )
+    (let (
+      (new-accuracy (max u0 (min u1000 (+ (get accuracy-score current-rep) (to-uint accuracy-delta)))))
+      (new-timeliness (max u0 (min u1000 (+ (get timeliness-score current-rep) (to-uint timeliness-delta)))))
+      (new-consistency (max u0 (min u1000 (+ (get consistency-score current-rep) (to-uint consistency-delta)))))
+      (new-total-score (/ (+ new-accuracy new-timeliness new-consistency) u3))
+    )
+      (map-set oracle-reputation {oracle-id: oracle-id} {
+        accuracy-score: new-accuracy,
+        timeliness-score: new-timeliness,
+        consistency-score: new-consistency,
+        stake-weight: (get stake-weight current-rep),
+        penalty-points: (get penalty-points current-rep),
+        total-score: new-total-score,
+        last-updated: current-time,
+        performance-history: (append (get performance-history current-rep) new-total-score)
+      })
+      
+      ;; Calculate reward based on new reputation
+      (try! (calculate-and-distribute-reward oracle-id new-total-score))
+      
+      (print {
+        notification: "reputation-updated",
+        payload: {
+          oracle-id: oracle-id,
+          new-total-score: new-total-score,
+          accuracy: new-accuracy,
+          timeliness: new-timeliness,
+          consistency: new-consistency
+        }
+      })
+      
+      (ok new-total-score)
+    )
+  )
+)
+
+;; Apply graduated penalties based on deviation severity
+(define-public (apply-graduated-penalty 
+  (oracle-id uint) 
+  (deviation-severity uint) ;; 0-10000 basis points
+  (evidence (string-utf8 256))
+)
+  (let (
+    (current-rep (unwrap! (map-get? oracle-reputation {oracle-id: oracle-id}) ERR_NOT_FOUND))
+    (penalty-amount (calculate-penalty-amount deviation-severity))
+    (current-time (default-to u0 (get-block-info? time (- block-height u1))))
+  )
+    (begin
+      ;; Apply penalty to reputation
+      (map-set oracle-reputation {oracle-id: oracle-id}
+        (merge current-rep {
+          penalty-points: (+ (get penalty-points current-rep) penalty-amount),
+          total-score: (max u0 (- (get total-score current-rep) penalty-amount)),
+          last-updated: current-time
+        }))
+      
+      ;; Record slashing event for transparency
+      (try! (record-slashing-event oracle-id penalty-amount evidence current-time))
+      
+      (print {
+        notification: "penalty-applied",
+        payload: {
+          oracle-id: oracle-id,
+          penalty-amount: penalty-amount,
+          deviation-severity: deviation-severity,
+          new-total-score: (max u0 (- (get total-score current-rep) penalty-amount))
+        }
+      })
+      
+      (ok penalty-amount)
+    )
+  )
+)
+
+;; Calculate penalty amount based on deviation severity
+(define-private (calculate-penalty-amount (deviation-severity uint))
+  (if (> deviation-severity u5000) ;; >50% deviation
+    u200 ;; Heavy penalty
+    (if (> deviation-severity u2000) ;; >20% deviation
+      u100 ;; Medium penalty
+      (if (> deviation-severity u500) ;; >5% deviation
+        u50  ;; Light penalty
+        u10  ;; Minimal penalty
+      )
+    )
+  )
+)
+
+;; Record slashing event for transparency and appeals
+(define-private (record-slashing-event 
+  (oracle-id uint) 
+  (penalty-amount uint) 
+  (evidence (string-utf8 256)) 
+  (timestamp uint)
+)
+  (let ((event-id (+ (* oracle-id u1000000) timestamp))) ;; Simple event ID generation
+    (map-set slashing-events {event-id: event-id} {
+      oracle-id: oracle-id,
+      penalty-amount: penalty-amount,
+      evidence: evidence,
+      timestamp: timestamp,
+      appeal-deadline: (+ timestamp u604800), ;; 7 days to appeal
+      appeal-submitted: false,
+      appeal-resolved: false,
+      penalty-reversed: false
+    })
+    (ok event-id)
+  )
+)
+
+;; Slashing events map for transparency
+(define-map slashing-events {event-id: uint} {
+  oracle-id: uint,
+  penalty-amount: uint,
+  evidence: (string-utf8 256),
+  timestamp: uint,
+  appeal-deadline: uint,
+  appeal-submitted: bool,
+  appeal-resolved: bool,
+  penalty-reversed: bool
+})
+
+;; Submit appeal for slashing event
+(define-public (submit-slashing-appeal 
+  (event-id uint) 
+  (appeal-evidence (string-utf8 512))
+)
+  (let (
+    (slashing-event (unwrap! (map-get? slashing-events {event-id: event-id}) ERR_NOT_FOUND))
+    (current-time (default-to u0 (get-block-info? time (- block-height u1))))
+  )
+    (begin
+      ;; Validation
+      (asserts! (< current-time (get appeal-deadline slashing-event)) ERR_APPEAL_PERIOD_EXPIRED)
+      (asserts! (not (get appeal-submitted slashing-event)) ERR_INVALID_PARAMETER)
+      
+      ;; Record appeal
+      (map-set slashing-events {event-id: event-id}
+        (merge slashing-event {
+          appeal-submitted: true
+        }))
+      
+      ;; Store appeal evidence
+      (map-set appeal-evidence {event-id: event-id} {
+        evidence: appeal-evidence,
+        submitted-at: current-time,
+        submitted-by: tx-sender
+      })
+      
+      (print {
+        notification: "slashing-appeal-submitted",
+        payload: {
+          event-id: event-id,
+          oracle-id: (get oracle-id slashing-event),
+          submitted-by: tx-sender
+        }
+      })
+      
+      (ok true)
+    )
+  )
+)
+
+;; Appeal evidence storage
+(define-map appeal-evidence {event-id: uint} {
+  evidence: (string-utf8 512),
+  submitted-at: uint,
+  submitted-by: principal
+})
+
+;; Calculate and distribute rewards based on performance
+(define-private (calculate-and-distribute-reward (oracle-id uint) (reputation-score uint))
+  (let (
+    (base-reward u1000) ;; Base reward amount
+    (reputation-multiplier (/ reputation-score u100)) ;; 0-10x multiplier
+    (total-reward (* base-reward reputation-multiplier))
+    (current-period (/ (default-to u0 (get-block-info? time (- block-height u1))) u86400)) ;; Daily periods
+  )
+    ;; Update oracle rewards
+    (map-set oracle-rewards {oracle-id: oracle-id, period: current-period} {
+      base-reward: base-reward,
+      accuracy-bonus: (- total-reward base-reward),
+      total-earned: total-reward,
+      last-claim: u0
+    })
+    
+    ;; Update total rewards distributed
+    (var-set total-oracle-rewards (+ (var-get total-oracle-rewards) total-reward))
+    
+    (ok total-reward)
+  )
+)
+
+;; Claim oracle rewards
+(define-public (claim-oracle-rewards (oracle-id uint) (period uint))
+  (let (
+    (oracle-data (unwrap! (map-get? oracle-providers {oracle-id: oracle-id}) ERR_NOT_FOUND))
+    (reward-data (unwrap! (map-get? oracle-rewards {oracle-id: oracle-id, period: period}) ERR_NOT_FOUND))
+    (current-time (default-to u0 (get-block-info? time (- block-height u1))))
+  )
+    (begin
+      ;; Validation
+      (asserts! (is-eq tx-sender (get provider oracle-data)) ERR_UNAUTHORIZED)
+      (asserts! (is-eq (get last-claim reward-data) u0) ERR_INVALID_PARAMETER) ;; Not already claimed
+      
+      ;; Mark as claimed
+      (map-set oracle-rewards {oracle-id: oracle-id, period: period}
+        (merge reward-data {
+          last-claim: current-time
+        }))
+      
+      ;; Would transfer actual tokens in production
+      
+      (print {
+        notification: "rewards-claimed",
+        payload: {
+          oracle-id: oracle-id,
+          period: period,
+          total-earned: (get total-earned reward-data),
+          claimed-by: tx-sender
+        }
+      })
+      
+      (ok (get total-earned reward-data))
+    )
+  )
+)
+
+;; Get oracle performance metrics
+(define-read-only (get-oracle-performance-metrics (oracle-id uint))
+  (let (
+    (oracle-data (map-get? oracle-providers {oracle-id: oracle-id}))
+    (reputation-data (map-get? oracle-reputation {oracle-id: oracle-id}))
+  )
+    (match oracle-data
+      oracle (match reputation-data
+        rep (ok {
+          oracle-id: oracle-id,
+          provider: (get provider oracle),
+          total-submissions: (get total-submissions oracle),
+          accurate-submissions: (get accurate-submissions oracle),
+          accuracy-rate: (if (> (get total-submissions oracle) u0)
+                          (/ (* (get accurate-submissions oracle) u100) (get total-submissions oracle))
+                          u0),
+          reputation-score: (get total-score rep),
+          accuracy-score: (get accuracy-score rep),
+          timeliness-score: (get timeliness-score rep),
+          consistency-score: (get consistency-score rep),
+          penalty-points: (get penalty-points rep),
+          stake-amount: (get stake-amount oracle),
+          active: (get active oracle)
+        })
+        (err ERR_NOT_FOUND))
+      (err ERR_NOT_FOUND)
+    )
+  )
+)
+
+;; Historical reputation storage
+(define-map reputation-history {oracle-id: uint, timestamp: uint} {
+  accuracy-score: uint,
+  timeliness-score: uint,
+  consistency-score: uint,
+  total-score: uint,
+  penalty-points: uint
+})
+
+;; Maintain historical reputation data
+(define-private (archive-reputation-history (oracle-id uint))
+  (let (
+    (current-rep (unwrap-panic (map-get? oracle-reputation {oracle-id: oracle-id})))
+    (current-time (default-to u0 (get-block-info? time (- block-height u1))))
+  )
+    ;; Store historical snapshot
+    (map-set reputation-history {oracle-id: oracle-id, timestamp: current-time} {
+      accuracy-score: (get accuracy-score current-rep),
+      timeliness-score: (get timeliness-score current-rep),
+      consistency-score: (get consistency-score current-rep),
+      total-score: (get total-score current-rep),
+      penalty-points: (get penalty-points current-rep)
+    })
+  )
+)
