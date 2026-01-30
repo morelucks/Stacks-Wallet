@@ -228,7 +228,156 @@
 (define-data-var system-paused bool false)
 (define-data-var maintenance-mode bool false)
 
-;; ===== ORACLE PROVIDER FUNCTIONS =====
+;; ===== ENHANCED ORACLE PROVIDER FUNCTIONS =====
+
+;; Submit enhanced data with comprehensive validation
+(define-public (submit-enhanced-data
+  (token-id uint)
+  (oracle-id uint)
+  (data-package {
+    price: uint,
+    volume: uint,
+    market-cap: uint,
+    liquidity: uint,
+    volatility: uint,
+    confidence: uint,
+    data-sources: (list 10 (string-ascii 32)),
+    timestamp: uint,
+    signature: (buff 65)
+  })
+)
+  (let (
+    (oracle-data (unwrap! (map-get? oracle-providers {oracle-id: oracle-id}) ERR_NOT_FOUND))
+    (oracle-config (unwrap! (map-get? oracle-configs {token-id: token-id}) ERR_NOT_FOUND))
+    (current-round (get-current-round token-id))
+    (current-time (default-to u0 (get-block-info? time (- block-height u1))))
+  )
+    (begin
+      ;; System state validation
+      (asserts! (not (var-get system-paused)) ERR_CIRCUIT_BREAKER_ACTIVE)
+      
+      ;; Oracle authorization
+      (asserts! (is-eq tx-sender (get provider oracle-data)) ERR_UNAUTHORIZED)
+      (asserts! (get active oracle-data) ERR_INVALID_PARAMETER)
+      (asserts! (get active oracle-config) ERR_INVALID_PARAMETER)
+      
+      ;; Data format validation
+      (try! (validate-data-format data-package))
+      
+      ;; Range validation
+      (try! (validate-data-ranges data-package token-id))
+      
+      ;; Timestamp validation
+      (try! (validate-timestamp (get timestamp data-package) current-time))
+      
+      ;; Confidence validation
+      (asserts! (<= (get confidence data-package) u100) ERR_INSUFFICIENT_CONFIDENCE)
+      (asserts! (>= (get confidence data-package) u10) ERR_INSUFFICIENT_CONFIDENCE)
+      
+      ;; Check for duplicate submission
+      (asserts! (is-none (map-get? enhanced-submissions {token-id: token-id, oracle-id: oracle-id, round-id: current-round})) ERR_DUPLICATE_SUBMISSION)
+      
+      ;; Calculate confidence score
+      (let ((calculated-confidence (calculate-confidence-score oracle-id data-package)))
+        ;; Submit enhanced data
+        (map-set enhanced-submissions {token-id: token-id, oracle-id: oracle-id, round-id: current-round} {
+          price: (get price data-package),
+          volume: (get volume data-package),
+          market-cap: (get market-cap data-package),
+          liquidity: (get liquidity data-package),
+          volatility: (get volatility data-package),
+          confidence: calculated-confidence,
+          data-sources: (get data-sources data-package),
+          timestamp: (get timestamp data-package),
+          signature: (get signature data-package),
+          validated: false,
+          outlier-score: u0
+        })
+        
+        ;; Update oracle stats
+        (map-set oracle-providers {oracle-id: oracle-id}
+          (merge oracle-data {
+            total-submissions: (+ (get total-submissions oracle-data) u1),
+            last-submission: current-time
+          })
+        )
+        
+        ;; Update round submission count
+        (try! (update-round-submissions token-id current-round))
+        
+        ;; Check aggregation threshold
+        (try! (check-aggregation-threshold token-id current-round))
+        
+        (print {
+          notification: "enhanced-data-submitted",
+          payload: {
+            token-id: token-id,
+            oracle-id: oracle-id,
+            round-id: current-round,
+            confidence: calculated-confidence,
+            data-sources-count: (len (get data-sources data-package))
+          }
+        })
+        
+        (ok true)
+      )
+    )
+  )
+)
+
+;; Batch submit multiple data points
+(define-public (batch-submit-data
+  (submissions (list 50 {
+    token-id: uint,
+    oracle-id: uint,
+    data-package: {
+      price: uint,
+      volume: uint,
+      market-cap: uint,
+      liquidity: uint,
+      volatility: uint,
+      confidence: uint,
+      data-sources: (list 10 (string-ascii 32)),
+      timestamp: uint,
+      signature: (buff 65)
+    }
+  }))
+)
+  (begin
+    (asserts! (not (var-get system-paused)) ERR_CIRCUIT_BREAKER_ACTIVE)
+    (fold process-batch-submission submissions (ok u0))
+  )
+)
+
+;; Process individual batch submission
+(define-private (process-batch-submission 
+  (submission {
+    token-id: uint,
+    oracle-id: uint,
+    data-package: {
+      price: uint,
+      volume: uint,
+      market-cap: uint,
+      liquidity: uint,
+      volatility: uint,
+      confidence: uint,
+      data-sources: (list 10 (string-ascii 32)),
+      timestamp: uint,
+      signature: (buff 65)
+    }
+  })
+  (previous-result (response uint uint))
+)
+  (match previous-result
+    success (match (submit-enhanced-data 
+                     (get token-id submission) 
+                     (get oracle-id submission) 
+                     (get data-package submission))
+              ok-result (ok (+ success u1))
+              err-result (err err-result))
+    error (err error)
+  )
+)
 
 ;; Register oracle provider
 (define-public (register-oracle-provider
@@ -453,7 +602,151 @@
   )
 )
 
-;; ===== HELPER FUNCTIONS =====
+;; ===== VALIDATION FUNCTIONS =====
+
+;; Validate data format
+(define-private (validate-data-format 
+  (data-package {
+    price: uint,
+    volume: uint,
+    market-cap: uint,
+    liquidity: uint,
+    volatility: uint,
+    confidence: uint,
+    data-sources: (list 10 (string-ascii 32)),
+    timestamp: uint,
+    signature: (buff 65)
+  })
+)
+  (begin
+    ;; Price validation
+    (asserts! (> (get price data-package) u0) ERR_INVALID_DATA_FORMAT)
+    
+    ;; Volume validation
+    (asserts! (>= (get volume data-package) u0) ERR_INVALID_DATA_FORMAT)
+    
+    ;; Market cap validation
+    (asserts! (>= (get market-cap data-package) u0) ERR_INVALID_DATA_FORMAT)
+    
+    ;; Liquidity validation
+    (asserts! (>= (get liquidity data-package) u0) ERR_INVALID_DATA_FORMAT)
+    
+    ;; Volatility validation (0-10000 basis points)
+    (asserts! (<= (get volatility data-package) u10000) ERR_INVALID_DATA_FORMAT)
+    
+    ;; Data sources validation
+    (asserts! (> (len (get data-sources data-package)) u0) ERR_INVALID_DATA_FORMAT)
+    
+    ;; Signature validation
+    (asserts! (> (len (get signature data-package)) u0) ERR_SIGNATURE_INVALID)
+    
+    (ok true)
+  )
+)
+
+;; Validate data ranges
+(define-private (validate-data-ranges 
+  (data-package {
+    price: uint,
+    volume: uint,
+    market-cap: uint,
+    liquidity: uint,
+    volatility: uint,
+    confidence: uint,
+    data-sources: (list 10 (string-ascii 32)),
+    timestamp: uint,
+    signature: (buff 65)
+  })
+  (token-id uint)
+)
+  (let (
+    (current-feed (map-get? enhanced-price-feeds {token-id: token-id}))
+    (price (get price data-package))
+  )
+    (match current-feed
+      feed (let (
+        (current-price (get current-price feed))
+        (max-deviation u5000) ;; 50% max deviation
+      )
+        (if (> current-price u0)
+          (let (
+            (deviation (if (> price current-price)
+                         (/ (* (- price current-price) u10000) current-price)
+                         (/ (* (- current-price price) u10000) current-price)))
+          )
+            (asserts! (<= deviation max-deviation) ERR_OUT_OF_RANGE)
+          )
+          (ok true) ;; No existing price data
+        )
+      )
+      (ok true) ;; No existing feed
+    )
+  )
+)
+
+;; Validate timestamp
+(define-private (validate-timestamp (timestamp uint) (current-time uint))
+  (begin
+    ;; Check if timestamp is not too old (max 5 minutes)
+    (asserts! (>= timestamp (- current-time u300)) ERR_STALE_TIMESTAMP)
+    
+    ;; Check if timestamp is not in future (max 1 minute ahead)
+    (asserts! (<= timestamp (+ current-time u60)) ERR_STALE_TIMESTAMP)
+    
+    (ok true)
+  )
+)
+
+;; Calculate confidence score based on oracle reputation and data sources
+(define-private (calculate-confidence-score 
+  (oracle-id uint) 
+  (data-package {
+    price: uint,
+    volume: uint,
+    market-cap: uint,
+    liquidity: uint,
+    volatility: uint,
+    confidence: uint,
+    data-sources: (list 10 (string-ascii 32)),
+    timestamp: uint,
+    signature: (buff 65)
+  })
+)
+  (let (
+    (oracle-rep (default-to 
+      {accuracy-score: u100, timeliness-score: u100, consistency-score: u100, 
+       stake-weight: u100, penalty-points: u0, total-score: u100, 
+       last-updated: u0, performance-history: (list)}
+      (map-get? oracle-reputation {oracle-id: oracle-id})))
+    (base-confidence (get confidence data-package))
+    (reputation-multiplier (/ (get total-score oracle-rep) u100))
+    (source-count-bonus (min u20 (* (len (get data-sources data-package)) u2)))
+  )
+    (min u100 (+ base-confidence 
+                 (/ (* base-confidence reputation-multiplier) u100)
+                 source-count-bonus))
+  )
+)
+
+;; Generate detailed error message for validation failures
+(define-private (generate-error-message (error-code uint) (context (string-ascii 64)))
+  (if (is-eq error-code u406)
+    "Invalid data format: Check price, volume, market-cap, liquidity, volatility ranges"
+    (if (is-eq error-code u407)
+      "Data out of range: Price deviation exceeds maximum allowed threshold"
+      (if (is-eq error-code u408)
+        "Stale timestamp: Data timestamp is too old or too far in future"
+        (if (is-eq error-code u409)
+          "Insufficient confidence: Confidence score below minimum threshold"
+          (if (is-eq error-code u410)
+            "Duplicate submission: Oracle already submitted for current round"
+            "Unknown validation error"
+          )
+        )
+      )
+    )
+  )
+)
 
 ;; Get current aggregation round
 (define-private (get-current-round (token-id uint))
