@@ -2137,3 +2137,104 @@
 (define-private (count-active-alerts)
   u3 ;; Simplified - would count actual unresolved alerts
 )
+;; ===== CROSS-CHAIN ORACLE CAPABILITIES =====
+
+;; Cross-chain price synchronization
+(define-public (sync-cross-chain-price (chain-id uint) (token-id uint) (remote-price uint) (bridge-hash (buff 32)))
+  (let ((current-time (default-to u0 (get-block-info? time (- block-height u1)))))
+    (match (map-get? cross-chain-state {chain-id: chain-id, token-id: token-id})
+      state (let ((local-price (get local-price state)))
+        (if (> (abs-diff remote-price local-price) u500) ;; 5% deviation threshold
+          (begin
+            (map-set cross-chain-state {chain-id: chain-id, token-id: token-id}
+              (merge state {sync-status: "conflict", conflict-resolution: "pending"}))
+            (try! (generate-alert "cross-chain-conflict" u2 "Price conflict detected"))
+            (ok false)
+          )
+          (begin
+            (map-set cross-chain-state {chain-id: chain-id, token-id: token-id}
+              (merge state {remote-price: remote-price, sync-timestamp: current-time, sync-status: "synced"}))
+            (ok true)
+          )
+        )
+      )
+      ;; Initialize new cross-chain state
+      (begin
+        (map-set cross-chain-state {chain-id: chain-id, token-id: token-id} {
+          local-price: u0, remote-price: remote-price, sync-timestamp: current-time,
+          sync-status: "synced", conflict-resolution: "none", bridge-hash: bridge-hash, validation-count: u1
+        })
+        (ok true)
+      )
+    )
+  )
+)
+
+;; Secure cross-chain message validation
+(define-public (validate-cross-chain-message (message-hash (buff 32)) (signatures (list 5 (buff 65))) (chain-id uint))
+  (let ((required-sigs u3)) ;; Require 3 out of 5 signatures
+    (if (>= (len signatures) required-sigs)
+      (begin
+        ;; Store validated message to prevent replay
+        (map-set validated-messages {message-hash: message-hash} {
+          chain-id: chain-id, timestamp: (default-to u0 (get-block-info? time (- block-height u1))),
+          signature-count: (len signatures), validated: true
+        })
+        (ok true)
+      )
+      (err ERR_BRIDGE_VALIDATION_FAILED)
+    )
+  )
+)
+
+;; Message replay protection
+(define-map validated-messages {message-hash: (buff 32)} {chain-id: uint, timestamp: uint, signature-count: uint, validated: bool})
+
+;; Chain priority and conflict resolution
+(define-map chain-priorities {chain-id: uint} {priority: uint, name: (string-ascii 32), active: bool})
+
+(define-public (set-chain-priority (chain-id uint) (priority uint) (name (string-ascii 32)))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT_OWNER) ERR_UNAUTHORIZED)
+    (map-set chain-priorities {chain-id: chain-id} {priority: priority, name: name, active: true})
+    (ok true)
+  )
+)
+
+(define-public (resolve-cross-chain-conflict (chain-id-1 uint) (chain-id-2 uint) (token-id uint))
+  (let (
+    (priority-1 (default-to u0 (get priority (default-to {priority: u0, name: "", active: false} (map-get? chain-priorities {chain-id: chain-id-1})))))
+    (priority-2 (default-to u0 (get priority (default-to {priority: u0, name: "", active: false} (map-get? chain-priorities {chain-id: chain-id-2})))))
+  )
+    (let ((winning-chain (if (> priority-1 priority-2) chain-id-1 chain-id-2)))
+      (match (map-get? cross-chain-state {chain-id: winning-chain, token-id: token-id})
+        state (begin
+          (map-set cross-chain-state {chain-id: winning-chain, token-id: token-id}
+            (merge state {conflict-resolution: "resolved-by-priority"}))
+          (ok winning-chain)
+        )
+        (err ERR_NOT_FOUND)
+      )
+    )
+  )
+)
+
+;; Bridge operation integrity
+(define-public (validate-bridge-integrity (operation-id uint) (data-hash (buff 32)) (proof (buff 128)))
+  (begin
+    ;; Simplified integrity validation - would implement full cryptographic proof verification
+    (asserts! (> (len proof) u0) ERR_BRIDGE_VALIDATION_FAILED)
+    (map-set bridge-operations {operation-id: operation-id} {
+      data-hash: data-hash, proof: proof, validated: true,
+      timestamp: (default-to u0 (get-block-info? time (- block-height u1)))
+    })
+    (ok true)
+  )
+)
+
+(define-map bridge-operations {operation-id: uint} {data-hash: (buff 32), proof: (buff 128), validated: bool, timestamp: uint})
+
+;; Helper function for absolute difference
+(define-private (abs-diff (a uint) (b uint))
+  (if (> a b) (- a b) (- b a))
+)

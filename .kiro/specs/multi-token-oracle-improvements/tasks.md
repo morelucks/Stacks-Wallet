@@ -186,7 +186,7 @@
   - **Property 30: Subscription usage tracking**
   - **Validates: Requirements 7.5**
 
-- [-] 10. Implement monitoring and alerting system
+- [x] 10. Implement monitoring and alerting system
   - Create health metrics tracking for oracle providers
   - Implement automated alert generation for anomalies
   - Add automatic failover to backup oracle providers
@@ -213,7 +213,7 @@
 - [ ] 11. Checkpoint - Ensure all advanced features tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 12. Implement cross-chain oracle capabilities
+- [-] 12. Implement cross-chain oracle capabilities
   - Create cross-chain price data synchronization
   - Implement secure cross-chain message passing
   - Add chain independence with eventual consistency
