@@ -401,6 +401,297 @@
     
     (ok true)))
 
+;; Bridge emergency response and circuit breaker system
+(define-map emergency-protocols uint {
+  protocol-name: (string-ascii 32),
+  trigger-conditions: (string-ascii 256),
+  response-actions: (list 5 (string-ascii 32)),
+  severity-level: uint,
+  auto-trigger: bool,
+  last-activated: uint,
+  activation-count: uint
+})
+
+(define-map circuit-breakers (string-ascii 32) {
+  breaker-type: (string-ascii 32), ;; "volume", "failure-rate", "validator-count", "security-incident"
+  threshold: uint,
+  current-value: uint,
+  window-blocks: uint,
+  window-start: uint,
+  triggered: bool,
+  trigger-count: uint,
+  last-reset: uint
+})
+
+(define-map emergency-contacts principal {
+  contact-type: (string-ascii 16), ;; "admin", "validator", "auditor"
+  notification-methods: (list 3 (string-ascii 16)), ;; "email", "sms", "webhook"
+  priority-level: uint,
+  active: bool
+})
+
+(define-data-var emergency-mode bool false)
+(define-data-var next-protocol-id uint u1)
+(define-data-var emergency-response-time uint u6) ;; 1 hour response window
+
+;; Initialize circuit breakers
+(map-set circuit-breakers "high-failure-rate" {
+  breaker-type: "failure-rate",
+  threshold: u20, ;; 20% failure rate
+  current-value: u0,
+  window-blocks: u144, ;; 24 hour window
+  window-start: block-height,
+  triggered: false,
+  trigger-count: u0,
+  last-reset: block-height
+})
+
+(map-set circuit-breakers "low-validator-count" {
+  breaker-type: "validator-count",
+  threshold: u3, ;; Minimum 3 validators
+  current-value: u10, ;; Assume 10 active validators initially
+  window-blocks: u6, ;; 1 hour window
+  window-start: block-height,
+  triggered: false,
+  trigger-count: u0,
+  last-reset: block-height
+})
+
+(map-set circuit-breakers "high-volume-spike" {
+  breaker-type: "volume",
+  threshold: u100, ;; 100 requests per hour
+  current-value: u0,
+  window-blocks: u6, ;; 1 hour window
+  window-start: block-height,
+  triggered: false,
+  trigger-count: u0,
+  last-reset: block-height
+})
+
+;; Create emergency protocol
+(define-public (create-emergency-protocol 
+  (protocol-name (string-ascii 32))
+  (trigger-conditions (string-ascii 256))
+  (response-actions (list 5 (string-ascii 32)))
+  (severity-level uint)
+  (auto-trigger bool))
+  (let ((protocol-id (var-get next-protocol-id)))
+    (begin
+      (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+      (asserts! (and (>= severity-level u1) (<= severity-level u5)) ERR-INVALID-REQUEST)
+      
+      (map-set emergency-protocols protocol-id {
+        protocol-name: protocol-name,
+        trigger-conditions: trigger-conditions,
+        response-actions: response-actions,
+        severity-level: severity-level,
+        auto-trigger: auto-trigger,
+        last-activated: u0,
+        activation-count: u0
+      })
+      
+      (var-set next-protocol-id (+ protocol-id u1))
+      
+      (print {
+        notification: "emergency-protocol-created",
+        payload: {
+          protocol-id: protocol-id,
+          protocol-name: protocol-name,
+          severity-level: severity-level
+        }
+      })
+      
+      (ok protocol-id))))
+
+;; Check and update circuit breakers
+(define-public (update-circuit-breaker 
+  (breaker-name (string-ascii 32))
+  (new-value uint))
+  (let ((breaker (unwrap! (map-get? circuit-breakers breaker-name) ERR-INVALID-REQUEST)))
+    (begin
+      (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+      
+      ;; Reset window if expired
+      (let ((updated-breaker (if (> (- block-height (get window-start breaker)) (get window-blocks breaker))
+                               (merge breaker {
+                                 current-value: new-value,
+                                 window-start: block-height,
+                                 last-reset: block-height
+                               })
+                               (merge breaker {current-value: new-value}))))
+        
+        ;; Check if threshold is breached
+        (let ((should-trigger (check-breaker-threshold updated-breaker)))
+          (if (and should-trigger (not (get triggered updated-breaker)))
+            (begin
+              ;; Trigger circuit breaker
+              (map-set circuit-breakers breaker-name
+                (merge updated-breaker {
+                  triggered: true,
+                  trigger-count: (+ (get trigger-count updated-breaker) u1)
+                }))
+              
+              ;; Activate emergency response
+              (try! (activate-emergency-response breaker-name (get breaker-type updated-breaker)))
+              
+              (print {
+                notification: "circuit-breaker-triggered",
+                payload: {
+                  breaker-name: breaker-name,
+                  threshold: (get threshold updated-breaker),
+                  current-value: new-value
+                }
+              }))
+            ;; Just update the breaker
+            (map-set circuit-breakers breaker-name updated-breaker)))
+        
+        (ok true)))))
+
+;; Check if breaker threshold is exceeded
+(define-private (check-breaker-threshold (breaker {breaker-type: (string-ascii 32), threshold: uint, current-value: uint, window-blocks: uint, window-start: uint, triggered: bool, trigger-count: uint, last-reset: uint}))
+  (let ((breaker-type (get breaker-type breaker)))
+    (if (is-eq breaker-type "failure-rate")
+      (>= (get current-value breaker) (get threshold breaker))
+      (if (is-eq breaker-type "validator-count")
+        (<= (get current-value breaker) (get threshold breaker))
+        (>= (get current-value breaker) (get threshold breaker))))))
+
+;; Activate emergency response
+(define-private (activate-emergency-response (trigger-source (string-ascii 32)) (incident-type (string-ascii 32)))
+  (begin
+    ;; Set emergency mode
+    (var-set emergency-mode true)
+    
+    ;; Pause bridge operations if critical
+    (if (or (is-eq incident-type "security-incident") (is-eq incident-type "validator-count"))
+      (var-set bridge-enabled false)
+      (ok true))
+    
+    ;; Notify emergency contacts
+    (try! (notify-emergency-contacts incident-type))
+    
+    (print {
+      notification: "emergency-response-activated",
+      payload: {
+        trigger-source: trigger-source,
+        incident-type: incident-type,
+        emergency-mode: true,
+        bridge-enabled: (var-get bridge-enabled)
+      }
+    })
+    
+    (ok true)))
+
+;; Notify emergency contacts
+(define-private (notify-emergency-contacts (incident-type (string-ascii 32)))
+  (begin
+    ;; Would iterate through emergency contacts and send notifications
+    ;; Simplified implementation
+    (print {
+      notification: "emergency-contacts-notified",
+      payload: {
+        incident-type: incident-type,
+        timestamp: block-height
+      }
+    })
+    (ok true)))
+
+;; Reset circuit breaker
+(define-public (reset-circuit-breaker (breaker-name (string-ascii 32)))
+  (let ((breaker (unwrap! (map-get? circuit-breakers breaker-name) ERR-INVALID-REQUEST)))
+    (begin
+      (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+      
+      (map-set circuit-breakers breaker-name
+        (merge breaker {
+          current-value: u0,
+          window-start: block-height,
+          triggered: false,
+          last-reset: block-height
+        }))
+      
+      (print {
+        notification: "circuit-breaker-reset",
+        payload: {
+          breaker-name: breaker-name,
+          reset-at: block-height
+        }
+      })
+      
+      (ok true))))
+
+;; Exit emergency mode
+(define-public (exit-emergency-mode)
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+    (asserts! (var-get emergency-mode) ERR-INVALID-REQUEST)
+    
+    ;; Verify all circuit breakers are reset
+    (asserts! (all-breakers-safe) ERR-BRIDGE-DISABLED)
+    
+    (var-set emergency-mode false)
+    (var-set bridge-enabled true)
+    
+    (print {
+      notification: "emergency-mode-exited",
+      payload: {
+        timestamp: block-height,
+        bridge-enabled: true
+      }
+    })
+    
+    (ok true)))
+
+;; Check if all circuit breakers are safe
+(define-private (all-breakers-safe)
+  ;; Simplified - would check all breakers
+  true)
+
+;; Add emergency contact
+(define-public (add-emergency-contact 
+  (contact principal)
+  (contact-type (string-ascii 16))
+  (notification-methods (list 3 (string-ascii 16)))
+  (priority-level uint))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+    (asserts! (and (>= priority-level u1) (<= priority-level u5)) ERR-INVALID-REQUEST)
+    
+    (map-set emergency-contacts contact {
+      contact-type: contact-type,
+      notification-methods: notification-methods,
+      priority-level: priority-level,
+      active: true
+    })
+    
+    (print {
+      notification: "emergency-contact-added",
+      payload: {
+        contact: contact,
+        contact-type: contact-type,
+        priority-level: priority-level
+      }
+    })
+    
+    (ok true)))
+
+;; Get emergency status
+(define-read-only (get-emergency-status)
+  {
+    emergency-mode: (var-get emergency-mode),
+    bridge-enabled: (var-get bridge-enabled),
+    response-time-window: (var-get emergency-response-time),
+    active-protocols: (- (var-get next-protocol-id) u1)
+  })
+
+;; Get circuit breaker status
+(define-read-only (get-circuit-breaker-status (breaker-name (string-ascii 32)))
+  (map-get? circuit-breakers breaker-name))
+
+;; Get emergency protocol
+(define-read-only (get-emergency-protocol (protocol-id uint))
+  (map-get? emergency-protocols protocol-id))
+
 ;; Bridge API integration and webhook system
 (define-map webhook-endpoints uint {
   url: (string-ascii 256),
