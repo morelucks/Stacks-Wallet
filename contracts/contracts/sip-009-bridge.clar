@@ -401,6 +401,176 @@
     
     (ok true)))
 
+;; Bridge security enhancements
+(define-map security-incidents uint {
+  incident-type: (string-ascii 32), ;; "suspicious-activity", "validator-misbehavior", "rate-limit-exceeded"
+  severity: uint, ;; 1-5 scale
+  detected-at: uint,
+  affected-validator: (optional principal),
+  affected-request: (optional uint),
+  auto-response: (string-ascii 64),
+  resolved: bool,
+  resolution-notes: (optional (string-ascii 256))
+})
+
+(define-data-var next-incident-id uint u1)
+(define-data-var security-level uint u1) ;; 1=normal, 2=elevated, 3=high, 4=critical
+(define-data-var rate-limit-per-user uint u5) ;; Max 5 requests per user per hour
+(define-map user-request-counts principal uint)
+(define-map user-last-request-time principal uint)
+
+;; Security monitoring and incident detection
+(define-public (report-security-incident 
+  (incident-type (string-ascii 32))
+  (severity uint)
+  (affected-validator (optional principal))
+  (affected-request (optional uint)))
+  (let ((incident-id (var-get next-incident-id)))
+    (begin
+      (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+      (asserts! (and (>= severity u1) (<= severity u5)) ERR-INVALID-REQUEST)
+      
+      (map-set security-incidents incident-id {
+        incident-type: incident-type,
+        severity: severity,
+        detected-at: block-height,
+        affected-validator: affected-validator,
+        affected-request: affected-request,
+        auto-response: (determine-auto-response incident-type severity),
+        resolved: false,
+        resolution-notes: none
+      })
+      
+      (var-set next-incident-id (+ incident-id u1))
+      
+      ;; Auto-escalate security level based on severity
+      (if (>= severity u4)
+        (var-set security-level u4)
+        (if (>= severity u3)
+          (var-set security-level (max (var-get security-level) u3))
+          (ok true)))
+      
+      ;; Execute auto-response
+      (try! (execute-security-response incident-type severity affected-validator))
+      
+      (print {
+        notification: "security-incident-reported",
+        payload: {
+          incident-id: incident-id,
+          incident-type: incident-type,
+          severity: severity,
+          security-level: (var-get security-level)
+        }
+      })
+      
+      (ok incident-id))))
+
+;; Determine automatic response based on incident
+(define-private (determine-auto-response (incident-type (string-ascii 32)) (severity uint))
+  (if (is-eq incident-type "validator-misbehavior")
+    (if (>= severity u4) "suspend-validator" "warn-validator")
+    (if (is-eq incident-type "rate-limit-exceeded")
+      "temporary-ban"
+      (if (>= severity u3) "increase-security-level" "monitor"))))
+
+;; Execute security response
+(define-private (execute-security-response 
+  (incident-type (string-ascii 32))
+  (severity uint)
+  (affected-validator (optional principal)))
+  (begin
+    (if (is-eq incident-type "validator-misbehavior")
+      (match affected-validator
+        validator (begin
+          (if (>= severity u4)
+            (try! (suspend-validator validator))
+            (ok true)))
+        (ok true))
+      (ok true))
+    
+    (if (>= severity u3)
+      (var-set security-level (+ (var-get security-level) u1))
+      (ok true))
+    
+    (ok true)))
+
+;; Suspend validator for security reasons
+(define-private (suspend-validator (validator principal))
+  (let ((validator-info (unwrap! (map-get? bridge-validators validator) ERR-NOT-AUTHORIZED)))
+    (begin
+      (map-set bridge-validators validator
+        (merge validator-info {active: false}))
+      
+      (print {
+        notification: "validator-suspended",
+        payload: {
+          validator: validator,
+          reason: "security-incident"
+        }
+      })
+      
+      (ok true))))
+
+;; Rate limiting check
+(define-private (check-rate-limit (user principal))
+  (let ((current-count (default-to u0 (map-get? user-request-counts user)))
+        (last-request (default-to u0 (map-get? user-last-request-time user)))
+        (time-diff (- block-height last-request)))
+    (begin
+      ;; Reset count if more than 1 hour (6 blocks) has passed
+      (if (> time-diff u6)
+        (begin
+          (map-set user-request-counts user u1)
+          (map-set user-last-request-time user block-height)
+          (ok true))
+        (if (< current-count (var-get rate-limit-per-user))
+          (begin
+            (map-set user-request-counts user (+ current-count u1))
+            (ok true))
+          (begin
+            ;; Rate limit exceeded - report incident
+            (try! (report-security-incident "rate-limit-exceeded" u2 none none))
+            (err ERR-BRIDGE-DISABLED)))))))
+
+;; Get security status
+(define-read-only (get-security-status)
+  {
+    security-level: (var-get security-level),
+    total-incidents: (- (var-get next-incident-id) u1),
+    rate-limit-per-user: (var-get rate-limit-per-user),
+    bridge-enabled: (var-get bridge-enabled)
+  })
+
+;; Resolve security incident
+(define-public (resolve-security-incident 
+  (incident-id uint)
+  (resolution-notes (string-ascii 256)))
+  (let ((incident (unwrap! (map-get? security-incidents incident-id) ERR-INVALID-REQUEST)))
+    (begin
+      (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+      (asserts! (not (get resolved incident)) ERR-INVALID-REQUEST)
+      
+      (map-set security-incidents incident-id
+        (merge incident {
+          resolved: true,
+          resolution-notes: (some resolution-notes)
+        }))
+      
+      ;; Lower security level if incident was high severity and now resolved
+      (if (>= (get severity incident) u3)
+        (var-set security-level (max (- (var-get security-level) u1) u1))
+        (ok true))
+      
+      (print {
+        notification: "security-incident-resolved",
+        payload: {
+          incident-id: incident-id,
+          new-security-level: (var-get security-level)
+        }
+      })
+      
+      (ok true))))
+
 ;; Bridge analytics and monitoring
 (define-map bridge-analytics (string-ascii 32) {
   daily-volume: uint,
