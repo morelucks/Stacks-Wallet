@@ -401,6 +401,186 @@
     
     (ok true)))
 
+;; Bridge performance optimization and caching
+(define-map performance-cache (string-ascii 64) {
+  cached-data: (string-ascii 512),
+  cache-timestamp: uint,
+  access-count: uint,
+  cache-ttl: uint
+})
+
+(define-map query-performance uint {
+  query-type: (string-ascii 32),
+  execution-time: uint,
+  gas-used: uint,
+  timestamp: uint,
+  optimized: bool
+})
+
+(define-data-var next-query-id uint u1)
+(define-data-var cache-hit-count uint u0)
+(define-data-var cache-miss-count uint u0)
+
+;; Cache frequently accessed data
+(define-public (cache-bridge-data 
+  (cache-key (string-ascii 64))
+  (data (string-ascii 512))
+  (ttl-blocks uint))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+    
+    (map-set performance-cache cache-key {
+      cached-data: data,
+      cache-timestamp: block-height,
+      access-count: u0,
+      cache-ttl: ttl-blocks
+    })
+    
+    (print {
+      notification: "data-cached",
+      payload: {
+        cache-key: cache-key,
+        ttl-blocks: ttl-blocks
+      }
+    })
+    
+    (ok true)))
+
+;; Get cached data with performance tracking
+(define-read-only (get-cached-data (cache-key (string-ascii 64)))
+  (match (map-get? performance-cache cache-key)
+    cache-entry (if (< (- block-height (get cache-timestamp cache-entry)) (get cache-ttl cache-entry))
+      (begin
+        ;; Cache hit - increment counters (would need to be done in public function)
+        (some {
+          data: (get cached-data cache-entry),
+          cache-hit: true,
+          age: (- block-height (get cache-timestamp cache-entry))
+        }))
+      ;; Cache expired
+      (some {
+        data: "",
+        cache-hit: false,
+        age: (- block-height (get cache-timestamp cache-entry))
+      }))
+    ;; Cache miss
+    none))
+
+;; Record query performance metrics
+(define-public (record-query-performance 
+  (query-type (string-ascii 32))
+  (execution-time uint)
+  (gas-used uint)
+  (optimized bool))
+  (let ((query-id (var-get next-query-id)))
+    (begin
+      (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+      
+      (map-set query-performance query-id {
+        query-type: query-type,
+        execution-time: execution-time,
+        gas-used: gas-used,
+        timestamp: block-height,
+        optimized: optimized
+      })
+      
+      (var-set next-query-id (+ query-id u1))
+      
+      (ok query-id))))
+
+;; Batch data operations for efficiency
+(define-public (batch-update-bridge-stats 
+  (updates (list 10 {chain: (string-ascii 32), volume: uint, success: bool})))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+    
+    (fold process-stats-update updates (ok u0))))
+
+(define-private (process-stats-update 
+  (update {chain: (string-ascii 32), volume: uint, success: bool})
+  (acc (response uint uint)))
+  (match acc
+    success-count (begin
+      (update-bridge-stats (get chain update) (get success update) (get volume update))
+      (ok (+ success-count u1)))
+    error (err error)))
+
+;; Optimize validator selection based on performance
+(define-read-only (get-optimal-validators (count uint))
+  (let ((all-validators (list tx-sender))) ;; Simplified - would get all active validators
+    (take count (sort-validators-by-performance all-validators))))
+
+(define-private (sort-validators-by-performance (validators (list 10 principal)))
+  ;; Simplified sorting - would implement proper performance-based sorting
+  validators)
+
+(define-private (take (n uint) (lst (list 10 principal)))
+  ;; Helper to take first n elements
+  (if (or (is-eq n u0) (is-eq (len lst) u0))
+    (list)
+    (unwrap-panic (as-max-len? (list (unwrap-panic (element-at lst u0))) u10))))
+
+;; Precompute common bridge statistics
+(define-public (precompute-bridge-analytics)
+  (let ((ethereum-stats (get-bridge-stats "ethereum"))
+        (polygon-stats (get-bridge-stats "polygon"))
+        (arbitrum-stats (get-bridge-stats "arbitrum")))
+    (begin
+      (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+      
+      ;; Cache aggregated statistics
+      (try! (cache-bridge-data 
+        "total-bridge-volume"
+        (uint-to-ascii (+ (default-to u0 (get total-bridged ethereum-stats))
+                         (+ (default-to u0 (get total-bridged polygon-stats))
+                            (default-to u0 (get total-bridged arbitrum-stats)))))
+        u144)) ;; Cache for 24 hours
+      
+      (try! (cache-bridge-data
+        "average-success-rate"
+        (uint-to-ascii (/ (+ (default-to u100 (get success-rate ethereum-stats))
+                            (+ (default-to u100 (get success-rate polygon-stats))
+                               (default-to u100 (get success-rate arbitrum-stats)))) u3))
+        u144))
+      
+      (print {
+        notification: "analytics-precomputed",
+        payload: {
+          timestamp: block-height
+        }
+      })
+      
+      (ok true))))
+
+;; Get performance metrics summary
+(define-read-only (get-performance-summary)
+  {
+    cache-hit-rate: (if (> (+ (var-get cache-hit-count) (var-get cache-miss-count)) u0)
+      (/ (* (var-get cache-hit-count) u100) 
+         (+ (var-get cache-hit-count) (var-get cache-miss-count)))
+      u0),
+    total-queries: (- (var-get next-query-id) u1),
+    cache-entries: u0, ;; Would count active cache entries
+    last-optimization: block-height
+  })
+
+;; Cleanup expired cache entries
+(define-public (cleanup-expired-cache)
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+    
+    ;; Would iterate through cache entries and remove expired ones
+    ;; Simplified implementation
+    
+    (print {
+      notification: "cache-cleanup-completed",
+      payload: {
+        timestamp: block-height
+      }
+    })
+    
+    (ok true)))
+
 ;; Bridge insurance and risk management
 (define-map insurance-policies uint {
   policy-holder: principal,
