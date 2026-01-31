@@ -28,7 +28,7 @@
 (define-data-var contract-symbol (string-ascii 16) "ENFT")
 (define-data-var total-supply uint u0)
 
-;; Enhanced metadata storage
+;; Enhanced metadata storage with packed data structures
 (define-map token-metadata uint {
   name: (string-ascii 64),
   description: (string-ascii 256),
@@ -37,6 +37,21 @@
   creator: principal,
   created-at: uint,
   rarity: (string-ascii 16)
+})
+
+;; Packed metadata for gas optimization
+(define-map packed-metadata uint {
+  packed-data: (buff 512),
+  version: uint,
+  checksum: (buff 32)
+})
+
+;; Metadata compression cache
+(define-map metadata-cache (buff 32) {
+  cached-data: (buff 256),
+  access-count: uint,
+  last-accessed: uint,
+  expiry-block: uint
 })
 
 ;; Royalty system
@@ -97,11 +112,55 @@
     
     (ok true)))
 
-;; Helper function to convert uint to ascii
-(define-private (uint-to-ascii (value uint))
-  (if (<= value u9)
-    (unwrap-panic (element-at "0123456789" value))
-    "N"))
+;; Gas optimization functions
+(define-private (pack-metadata (metadata {name: (string-ascii 64), description: (string-ascii 256), image: (string-ascii 256), attributes: (list 10 {trait_type: (string-ascii 32), value: (string-ascii 64)}), creator: principal, created-at: uint, rarity: (string-ascii 16)}))
+  (let ((packed-buffer (concat 
+    (unwrap-panic (to-consensus-buff? (get name metadata)))
+    (unwrap-panic (to-consensus-buff? (get description metadata)))
+    (unwrap-panic (to-consensus-buff? (get image metadata)))
+    (unwrap-panic (to-consensus-buff? (get creator metadata)))
+    (unwrap-panic (to-consensus-buff? (get created-at metadata)))
+    (unwrap-panic (to-consensus-buff? (get rarity metadata))))))
+    (as-max-len? packed-buffer u512)))
+
+(define-private (calculate-checksum (data (buff 512)))
+  (sha256 data))
+
+(define-private (compress-metadata (token-id uint) (metadata {name: (string-ascii 64), description: (string-ascii 256), image: (string-ascii 256), attributes: (list 10 {trait_type: (string-ascii 32), value: (string-ascii 64)}), creator: principal, created-at: uint, rarity: (string-ascii 16)}))
+  (let ((packed-data (unwrap-panic (pack-metadata metadata)))
+        (checksum (calculate-checksum packed-data)))
+    (map-set packed-metadata token-id {
+      packed-data: packed-data,
+      version: u1,
+      checksum: checksum
+    })
+    (ok true)))
+
+;; Cache management functions
+(define-private (get-cache-key (operation (string-ascii 32)) (params (buff 64)))
+  (sha256 (concat (unwrap-panic (to-consensus-buff? operation)) params)))
+
+(define-private (cache-data (cache-key (buff 32)) (data (buff 256)))
+  (map-set metadata-cache cache-key {
+    cached-data: data,
+    access-count: u1,
+    last-accessed: block-height,
+    expiry-block: (+ block-height u1000)
+  })
+  (ok true))
+
+(define-private (get-cached-data (cache-key (buff 32)))
+  (match (map-get? metadata-cache cache-key)
+    cache-entry (if (< block-height (get expiry-block cache-entry))
+      (begin
+        (map-set metadata-cache cache-key 
+          (merge cache-entry {
+            access-count: (+ (get access-count cache-entry) u1),
+            last-accessed: block-height
+          }))
+        (some (get cached-data cache-entry)))
+      none)
+    none))
 
 ;; Authorization helper
 (define-private (is-authorized (owner principal) (token-id uint))
