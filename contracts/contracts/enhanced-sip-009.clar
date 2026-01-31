@@ -707,6 +707,141 @@
 (define-read-only (get-metadata-history (token-id uint))
   (map-get? metadata-versions token-id))
 
+;; Enhanced metadata history tracking
+(define-map metadata-change-log uint (list 20 {
+  change-type: (string-ascii 32),
+  old-value: (string-ascii 256),
+  new-value: (string-ascii 256),
+  changed-by: principal,
+  changed-at: uint,
+  transaction-id: (buff 32)
+}))
+
+(define-data-var next-change-id uint u1)
+
+;; Log metadata change
+(define-private (log-metadata-change 
+  (token-id uint)
+  (change-type (string-ascii 32))
+  (old-value (string-ascii 256))
+  (new-value (string-ascii 256)))
+  (let ((change-id (var-get next-change-id))
+        (current-log (default-to (list) (map-get? metadata-change-log token-id)))
+        (new-entry {
+          change-type: change-type,
+          old-value: old-value,
+          new-value: new-value,
+          changed-by: tx-sender,
+          changed-at: block-height,
+          transaction-id: (sha256 (unwrap-panic (to-consensus-buff? block-height)))
+        }))
+    (begin
+      (map-set metadata-change-log token-id 
+        (unwrap-panic (as-max-len? (append current-log new-entry) u20)))
+      (var-set next-change-id (+ change-id u1))
+      (ok true))))
+
+;; Get complete metadata history with changes
+(define-read-only (get-complete-metadata-history (token-id uint))
+  {
+    versions: (map-get? metadata-versions token-id),
+    changes: (map-get? metadata-change-log token-id),
+    current-metadata: (map-get? token-metadata token-id)
+  })
+
+;; Track metadata compression history
+(define-map compression-history uint (list 10 {
+  compressed-at: uint,
+  original-size: uint,
+  compressed-size: uint,
+  compression-ratio: uint,
+  algorithm: (string-ascii 16)
+}))
+
+;; Log compression event
+(define-private (log-compression-event 
+  (token-id uint)
+  (original-size uint)
+  (compressed-size uint))
+  (let ((current-history (default-to (list) (map-get? compression-history token-id)))
+        (compression-ratio (if (> original-size u0) (/ (* compressed-size u100) original-size) u0))
+        (new-entry {
+          compressed-at: block-height,
+          original-size: original-size,
+          compressed-size: compressed-size,
+          compression-ratio: compression-ratio,
+          algorithm: "custom"
+        }))
+    (begin
+      (map-set compression-history token-id 
+        (unwrap-panic (as-max-len? (append current-history new-entry) u10)))
+      (ok true))))
+
+;; Enhanced compress-metadata with history tracking
+(define-private (compress-metadata-with-history (token-id uint) (metadata {name: (string-ascii 64), description: (string-ascii 256), image: (string-ascii 256), attributes: (list 10 {trait_type: (string-ascii 32), value: (string-ascii 64)}), creator: principal, created-at: uint, rarity: (string-ascii 16)}))
+  (let ((packed-data (unwrap-panic (pack-metadata metadata)))
+        (checksum (calculate-checksum packed-data))
+        (original-size (len (unwrap-panic (to-consensus-buff? metadata))))
+        (compressed-size (len packed-data)))
+    (begin
+      (map-set packed-metadata token-id {
+        packed-data: packed-data,
+        version: u1,
+        checksum: checksum
+      })
+      (try! (log-compression-event token-id original-size compressed-size))
+      (ok true))))
+
+;; Get compression statistics
+(define-read-only (get-compression-stats (token-id uint))
+  (map-get? compression-history token-id))
+
+;; Rollback to previous metadata version
+(define-public (rollback-metadata (token-id uint) (version-number uint))
+  (let ((metadata (unwrap! (map-get? token-metadata token-id) ERR-TOKEN-NOT-FOUND))
+        (versions (unwrap! (map-get? metadata-versions token-id) ERR-TOKEN-NOT-FOUND)))
+    (begin
+      (asserts! (is-eq tx-sender (get creator metadata)) ERR-UNAUTHORIZED)
+      (asserts! (< version-number (len versions)) ERR-INVALID-METADATA)
+      
+      (let ((target-version (unwrap! (element-at versions version-number) ERR-INVALID-METADATA))
+            (old-metadata-str (unwrap-panic (to-consensus-buff? metadata)))
+            (new-metadata (get metadata target-version)))
+        (begin
+          ;; Log the rollback
+          (try! (log-metadata-change token-id "rollback" 
+            (unwrap-panic (as-max-len? old-metadata-str u256))
+            (unwrap-panic (as-max-len? (unwrap-panic (to-consensus-buff? new-metadata)) u256))))
+          
+          ;; Update metadata
+          (map-set token-metadata token-id new-metadata)
+          
+          (print {
+            notification: "metadata-rollback",
+            payload: {
+              token-id: token-id,
+              rolled-back-to-version: version-number,
+              rolled-back-at: block-height
+            }
+          })
+          
+          (ok true))))))
+
+;; Get metadata change statistics
+(define-read-only (get-metadata-stats (token-id uint))
+  (let ((changes (default-to (list) (map-get? metadata-change-log token-id)))
+        (versions (default-to (list) (map-get? metadata-versions token-id))))
+    {
+      total-changes: (len changes),
+      total-versions: (len versions),
+      last-changed: (match (element-at changes (- (len changes) u1))
+        last-change (some (get changed-at last-change))
+        none),
+      created-at: (match (map-get? token-metadata token-id)
+        metadata (some (get created-at metadata))
+        none)
+    }))
+
 ;; Get evolution rule
 (define-read-only (get-evolution-rule (rule-id uint))
   (map-get? evolution-rules rule-id))
