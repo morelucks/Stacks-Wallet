@@ -168,6 +168,80 @@
     (and (is-eq proof-hash computed-hash)
          (is-eq merkle-root (keccak256 (concat proof-hash (buff-to-hex block-height)))))))
 
+;; Cross-chain metadata synchronization
+(define-map metadata-sync uint {
+  token-id: uint,
+  source-chain: (string-ascii 32),
+  target-chain: (string-ascii 32),
+  metadata-hash: (buff 32),
+  sync-status: (string-ascii 16), ;; pending, synced, failed
+  last-updated: uint,
+  sync-attempts: uint
+})
+
+;; Synchronize metadata across chains
+(define-public (sync-metadata-cross-chain 
+  (token-id uint)
+  (target-chain (string-ascii 32))
+  (metadata-uri (string-ascii 256)))
+  (let ((metadata-hash (keccak256 metadata-uri))
+        (sync-id (+ (* token-id u1000) (len target-chain))))
+    (begin
+      (asserts! (is-token-owner token-id tx-sender) ERR-NOT-AUTHORIZED)
+      
+      (map-set metadata-sync sync-id {
+        token-id: token-id,
+        source-chain: "stacks",
+        target-chain: target-chain,
+        metadata-hash: metadata-hash,
+        sync-status: "pending",
+        last-updated: block-height,
+        sync-attempts: u1
+      })
+      
+      (print {
+        notification: "metadata-sync-initiated",
+        payload: {
+          token-id: token-id,
+          target-chain: target-chain,
+          metadata-hash: metadata-hash,
+          sync-id: sync-id
+        }
+      })
+      
+      (ok sync-id))))
+
+;; Confirm metadata synchronization
+(define-public (confirm-metadata-sync 
+  (sync-id uint)
+  (confirmation-hash (buff 32)))
+  (let ((sync-info (unwrap! (map-get? metadata-sync sync-id) ERR-INVALID-REQUEST)))
+    (begin
+      (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED) ;; Would be oracle
+      (asserts! (is-eq (get sync-status sync-info) "pending") ERR-INVALID-REQUEST)
+      (asserts! (is-eq (get metadata-hash sync-info) confirmation-hash) ERR-INVALID-REQUEST)
+      
+      (map-set metadata-sync sync-id
+        (merge sync-info {
+          sync-status: "synced",
+          last-updated: block-height
+        }))
+      
+      (print {
+        notification: "metadata-sync-confirmed",
+        payload: {
+          sync-id: sync-id,
+          token-id: (get token-id sync-info),
+          target-chain: (get target-chain sync-info)
+        }
+      })
+      
+      (ok true))))
+
+;; Get metadata sync status
+(define-read-only (get-metadata-sync-status (sync-id uint))
+  (map-get? metadata-sync sync-id))
+
 ;; Helper functions for proof generation
 (define-private (uint-to-ascii (value uint))
   (if (is-eq value u0) "0"
