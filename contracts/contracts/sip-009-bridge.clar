@@ -401,6 +401,139 @@
     
     (ok true)))
 
+;; Dynamic bridge fee management
+(define-map dynamic-pricing uint {
+  base-fee: uint,
+  congestion-multiplier: uint, ;; 100 = 1.0x, 150 = 1.5x
+  time-of-day-multiplier: uint,
+  demand-multiplier: uint,
+  last-updated: uint
+})
+
+;; Fee tier system for different user types
+(define-map user-fee-tiers principal {
+  tier: (string-ascii 16), ;; "basic", "premium", "enterprise"
+  discount-percentage: uint,
+  monthly-volume: uint,
+  tier-expires: uint
+})
+
+;; Initialize dynamic pricing
+(map-set dynamic-pricing u1 {
+  base-fee: u1000000, ;; 1 STX base fee
+  congestion-multiplier: u100,
+  time-of-day-multiplier: u100,
+  demand-multiplier: u100,
+  last-updated: block-height
+})
+
+;; Calculate dynamic bridge fee
+(define-private (calculate-dynamic-fee (target-chain (string-ascii 32)) (user principal))
+  (let ((chain-config (unwrap-panic (map-get? chain-configs target-chain)))
+        (pricing (unwrap-panic (map-get? dynamic-pricing u1)))
+        (user-tier (map-get? user-fee-tiers user)))
+    (let ((base-fee (get bridge-fee chain-config))
+          (congestion-fee (/ (* base-fee (get congestion-multiplier pricing)) u100))
+          (time-fee (/ (* congestion-fee (get time-of-day-multiplier pricing)) u100))
+          (demand-fee (/ (* time-fee (get demand-multiplier pricing)) u100)))
+      (match user-tier
+        tier-info (let ((discount (get discount-percentage tier-info)))
+                    (- demand-fee (/ (* demand-fee discount) u100)))
+        demand-fee))))
+
+;; Update dynamic pricing based on network conditions
+(define-public (update-dynamic-pricing 
+  (congestion-level uint)
+  (time-multiplier uint)
+  (demand-level uint))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+    (asserts! (and (<= congestion-level u300) (<= time-multiplier u200) (<= demand-level u250)) ERR-INVALID-REQUEST)
+    
+    (map-set dynamic-pricing u1 {
+      base-fee: u1000000,
+      congestion-multiplier: congestion-level,
+      time-of-day-multiplier: time-multiplier,
+      demand-multiplier: demand-level,
+      last-updated: block-height
+    })
+    
+    (print {
+      notification: "dynamic-pricing-updated",
+      payload: {
+        congestion-level: congestion-level,
+        time-multiplier: time-multiplier,
+        demand-level: demand-level
+      }
+    })
+    
+    (ok true)))
+
+;; Set user fee tier
+(define-public (set-user-fee-tier 
+  (user principal)
+  (tier (string-ascii 16))
+  (discount-percentage uint)
+  (duration-blocks uint))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+    (asserts! (<= discount-percentage u50) ERR-INVALID-REQUEST) ;; Max 50% discount
+    
+    (map-set user-fee-tiers user {
+      tier: tier,
+      discount-percentage: discount-percentage,
+      monthly-volume: u0,
+      tier-expires: (+ block-height duration-blocks)
+    })
+    
+    (print {
+      notification: "user-tier-updated",
+      payload: {
+        user: user,
+        tier: tier,
+        discount: discount-percentage
+      }
+    })
+    
+    (ok true)))
+
+;; Get current fee estimate
+(define-read-only (get-fee-estimate (target-chain (string-ascii 32)) (user principal))
+  (ok (calculate-dynamic-fee target-chain user)))
+
+;; Bridge fee revenue tracking
+(define-map fee-revenue uint {
+  total-collected: uint,
+  validator-rewards: uint,
+  protocol-treasury: uint,
+  last-distribution: uint
+})
+
+;; Distribute fee revenue
+(define-public (distribute-fee-revenue (total-amount uint))
+  (let ((validator-share (/ (* total-amount u60) u100)) ;; 60% to validators
+        (treasury-share (/ (* total-amount u40) u100))) ;; 40% to treasury
+    (begin
+      (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+      
+      (map-set fee-revenue u1 {
+        total-collected: total-amount,
+        validator-rewards: validator-share,
+        protocol-treasury: treasury-share,
+        last-distribution: block-height
+      })
+      
+      (print {
+        notification: "fee-revenue-distributed",
+        payload: {
+          total-amount: total-amount,
+          validator-share: validator-share,
+          treasury-share: treasury-share
+        }
+      })
+      
+      (ok true))))
+
 ;; Bridge security enhancements
 (define-map security-incidents uint {
   incident-type: (string-ascii 32), ;; "suspicious-activity", "validator-misbehavior", "rate-limit-exceeded"
