@@ -1726,9 +1726,251 @@
 (define-read-only (get-security-event (event-id uint))
   (map-get? security-events event-id))
 
-;; Get suspicious activity info
-(define-read-only (get-suspicious-activity-info (user principal))
-  (map-get? suspicious-activities user))
+;; Multi-Signature Authorization System
+(define-map authorized-signers principal {
+  active: bool,
+  role: (string-ascii 32),
+  added-at: uint,
+  added-by: principal
+})
+
+(define-map multi-sig-proposals uint {
+  proposal-type: (string-ascii 32),
+  target-function: (string-ascii 64),
+  parameters: (string-ascii 512),
+  required-signatures: uint,
+  current-signatures: uint,
+  signers: (list 10 principal),
+  executed: bool,
+  created-by: principal,
+  created-at: uint,
+  expires-at: uint
+})
+
+(define-map proposal-signatures {proposal-id: uint, signer: principal} {
+  signed-at: uint,
+  signature-hash: (buff 32)
+})
+
+(define-data-var next-multisig-proposal-id uint u1)
+(define-data-var required-signers-count uint u3)
+(define-data-var multisig-enabled bool true)
+
+;; Add authorized signer
+(define-public (add-authorized-signer (signer principal) (role (string-ascii 32)))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-OWNER-ONLY)
+    (asserts! (var-get multisig-enabled) ERR-CONTRACT-PAUSED)
+    
+    (map-set authorized-signers signer {
+      active: true,
+      role: role,
+      added-at: block-height,
+      added-by: tx-sender
+    })
+    
+    (print {
+      notification: "authorized-signer-added",
+      payload: {
+        signer: signer,
+        role: role,
+        added-by: tx-sender
+      }
+    })
+    
+    (ok true)))
+
+;; Remove authorized signer
+(define-public (remove-authorized-signer (signer principal))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-OWNER-ONLY)
+    
+    (match (map-get? authorized-signers signer)
+      signer-info (begin
+        (map-set authorized-signers signer (merge signer-info {active: false}))
+        (ok true))
+      (err ERR-TOKEN-NOT-FOUND))))
+
+;; Create multi-signature proposal
+(define-public (create-multisig-proposal 
+  (proposal-type (string-ascii 32))
+  (target-function (string-ascii 64))
+  (parameters (string-ascii 512))
+  (required-signatures uint)
+  (duration uint))
+  (let ((proposal-id (var-get next-multisig-proposal-id)))
+    (begin
+      (asserts! (var-get multisig-enabled) ERR-CONTRACT-PAUSED)
+      (asserts! (is-some (map-get? authorized-signers tx-sender)) ERR-UNAUTHORIZED)
+      (asserts! (> required-signatures u0) ERR-INVALID-PRICE)
+      (asserts! (<= required-signatures (var-get required-signers-count)) ERR-BATCH-SIZE-EXCEEDED)
+      
+      (map-set multi-sig-proposals proposal-id {
+        proposal-type: proposal-type,
+        target-function: target-function,
+        parameters: parameters,
+        required-signatures: required-signatures,
+        current-signatures: u0,
+        signers: (list),
+        executed: false,
+        created-by: tx-sender,
+        created-at: block-height,
+        expires-at: (+ block-height duration)
+      })
+      
+      (var-set next-multisig-proposal-id (+ proposal-id u1))
+      
+      (print {
+        notification: "multisig-proposal-created",
+        payload: {
+          proposal-id: proposal-id,
+          proposal-type: proposal-type,
+          target-function: target-function,
+          required-signatures: required-signatures,
+          expires-at: (+ block-height duration)
+        }
+      })
+      
+      (ok proposal-id))))
+
+;; Sign multi-signature proposal
+(define-public (sign-multisig-proposal (proposal-id uint))
+  (let ((proposal (unwrap! (map-get? multi-sig-proposals proposal-id) ERR-TOKEN-NOT-FOUND))
+        (signer-info (unwrap! (map-get? authorized-signers tx-sender) ERR-UNAUTHORIZED)))
+    (begin
+      (asserts! (get active signer-info) ERR-UNAUTHORIZED)
+      (asserts! (not (get executed proposal)) ERR-UNAUTHORIZED)
+      (asserts! (< block-height (get expires-at proposal)) ERR-UNAUTHORIZED)
+      (asserts! (is-none (map-get? proposal-signatures {proposal-id: proposal-id, signer: tx-sender})) ERR-TOKEN-EXISTS)
+      
+      ;; Record signature
+      (let ((signature-hash (sha256 (unwrap-panic (to-consensus-buff? proposal-id)))))
+        (begin
+          (map-set proposal-signatures {proposal-id: proposal-id, signer: tx-sender} {
+            signed-at: block-height,
+            signature-hash: signature-hash
+          })
+          
+          ;; Update proposal with new signature
+          (let ((new-signature-count (+ (get current-signatures proposal) u1))
+                (updated-signers (unwrap-panic (as-max-len? 
+                  (append (get signers proposal) tx-sender) u10))))
+            (begin
+              (map-set multi-sig-proposals proposal-id (merge proposal {
+                current-signatures: new-signature-count,
+                signers: updated-signers
+              }))
+              
+              (print {
+                notification: "multisig-proposal-signed",
+                payload: {
+                  proposal-id: proposal-id,
+                  signer: tx-sender,
+                  current-signatures: new-signature-count,
+                  required-signatures: (get required-signatures proposal)
+                }
+              })
+              
+              ;; Check if proposal can be executed
+              (if (>= new-signature-count (get required-signatures proposal))
+                (try! (execute-multisig-proposal proposal-id))
+                (ok false))
+              
+              (ok true)))))))
+
+;; Execute multi-signature proposal
+(define-private (execute-multisig-proposal (proposal-id uint))
+  (let ((proposal (unwrap! (map-get? multi-sig-proposals proposal-id) ERR-TOKEN-NOT-FOUND)))
+    (begin
+      (asserts! (not (get executed proposal)) ERR-UNAUTHORIZED)
+      (asserts! (>= (get current-signatures proposal) (get required-signatures proposal)) ERR-UNAUTHORIZED)
+      
+      ;; Mark as executed
+      (map-set multi-sig-proposals proposal-id (merge proposal {executed: true}))
+      
+      ;; Execute based on proposal type
+      (try! (execute-proposal-action proposal))
+      
+      (print {
+        notification: "multisig-proposal-executed",
+        payload: {
+          proposal-id: proposal-id,
+          proposal-type: (get proposal-type proposal),
+          target-function: (get target-function proposal),
+          executed-at: block-height
+        }
+      })
+      
+      (ok true))))
+
+;; Execute proposal action based on type
+(define-private (execute-proposal-action 
+  (proposal {proposal-type: (string-ascii 32), target-function: (string-ascii 64), parameters: (string-ascii 512), required-signatures: uint, current-signatures: uint, signers: (list 10 principal), executed: bool, created-by: principal, created-at: uint, expires-at: uint}))
+  (let ((proposal-type (get proposal-type proposal)))
+    (if (is-eq proposal-type "pause-contract")
+      (begin
+        (var-set contract-paused true)
+        (ok true))
+      (if (is-eq proposal-type "unpause-contract")
+        (begin
+          (var-set contract-paused false)
+          (ok true))
+        (if (is-eq proposal-type "update-fee")
+          (begin
+            ;; Parse fee from parameters (simplified)
+            (var-set trading-fee-percentage u300) ;; 3%
+            (ok true))
+          (ok true)))))) ;; Default case
+
+;; Multi-sig protected contract pause
+(define-public (multisig-pause-contract (reason (string-ascii 256)))
+  (let ((proposal-id (try! (create-multisig-proposal 
+    "pause-contract" 
+    "set-contract-paused" 
+    reason 
+    u2 ;; Require 2 signatures
+    u1000)))) ;; 1000 blocks to expire
+    (begin
+      (try! (sign-multisig-proposal proposal-id))
+      (ok proposal-id))))
+
+;; Multi-sig protected fee update
+(define-public (multisig-update-fee (new-fee-percentage uint))
+  (let ((proposal-id (try! (create-multisig-proposal 
+    "update-fee" 
+    "set-platform-fee-percentage" 
+    (uint-to-string new-fee-percentage)
+    u3 ;; Require 3 signatures
+    u2000)))) ;; 2000 blocks to expire
+    (begin
+      (try! (sign-multisig-proposal proposal-id))
+      (ok proposal-id))))
+
+;; Get multi-sig proposal info
+(define-read-only (get-multisig-proposal (proposal-id uint))
+  (map-get? multi-sig-proposals proposal-id))
+
+;; Get signer info
+(define-read-only (get-signer-info (signer principal))
+  (map-get? authorized-signers signer))
+
+;; Get proposal signature
+(define-read-only (get-proposal-signature (proposal-id uint) (signer principal))
+  (map-get? proposal-signatures {proposal-id: proposal-id, signer: signer}))
+
+;; Check if user is authorized signer
+(define-read-only (is-authorized-signer (user principal))
+  (match (map-get? authorized-signers user)
+    signer-info (get active signer-info)
+    false))
+
+;; Get multi-sig system status
+(define-read-only (get-multisig-status)
+  {
+    enabled: (var-get multisig-enabled),
+    required-signers: (var-get required-signers-count),
+    total-proposals: (- (var-get next-multisig-proposal-id) u1)
+  })
 (define-map listings uint {
   seller: principal,
   price: uint,
