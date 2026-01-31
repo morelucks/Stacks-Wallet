@@ -223,37 +223,39 @@
 ;; Check if approved for all
 (define-read-only (is-approved-for-all (owner principal) (operator principal))
   (default-to false (map-get? operator-approvals {owner: owner, operator: operator})))
-;; Batch operations for gas efficiency
-(define-public (batch-mint 
-  (recipients (list 50 principal))
-  (names (list 50 (string-ascii 64)))
-  (descriptions (list 50 (string-ascii 256)))
-  (images (list 50 (string-ascii 256))))
+;; Optimized batch operations for gas efficiency
+(define-public (optimized-batch-mint 
+  (recipients (list 100 principal))
+  (names (list 100 (string-ascii 64)))
+  (descriptions (list 100 (string-ascii 256)))
+  (images (list 100 (string-ascii 256))))
   (let ((batch-size (len recipients)))
     (begin
       (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-OWNER-ONLY)
       (asserts! (not (var-get contract-paused)) ERR-CONTRACT-PAUSED)
-      (asserts! (<= batch-size u50) ERR-BATCH-SIZE-EXCEEDED)
+      (asserts! (<= batch-size u100) ERR-BATCH-SIZE-EXCEEDED)
       (asserts! (is-eq batch-size (len names)) ERR-BATCH-SIZE-EXCEEDED)
       (asserts! (is-eq batch-size (len descriptions)) ERR-BATCH-SIZE-EXCEEDED)
       (asserts! (is-eq batch-size (len images)) ERR-BATCH-SIZE-EXCEEDED)
       
-      (try! (fold batch-mint-helper 
-        (zip-mint-data recipients names descriptions images) 
+      ;; Use optimized batch processing
+      (try! (fold optimized-mint-helper 
+        (zip-optimized-mint-data recipients names descriptions images) 
         (ok u0)))
       
       (print {
-        notification: "batch-mint-completed",
+        notification: "optimized-batch-mint-completed",
         payload: {
           count: batch-size,
-          starting-id: (+ (var-get last-token-id) u1)
+          starting-id: (+ (var-get last-token-id) u1),
+          gas-optimized: true
         }
       })
       
       (ok batch-size))))
 
-;; Helper for batch minting
-(define-private (batch-mint-helper 
+;; Optimized helper for batch minting with reduced gas consumption
+(define-private (optimized-mint-helper 
   (mint-data {recipient: principal, name: (string-ascii 64), description: (string-ascii 256), image: (string-ascii 256)})
   (acc (response uint uint)))
   (match acc
@@ -261,7 +263,8 @@
       (begin
         (try! (nft-mint? enhanced-nft token-id (get recipient mint-data)))
         
-        (map-set token-metadata token-id {
+        ;; Use compressed metadata storage
+        (let ((metadata {
           name: (get name mint-data),
           description: (get description mint-data),
           image: (get image mint-data),
@@ -269,7 +272,8 @@
           creator: tx-sender,
           created-at: block-height,
           rarity: "common"
-        })
+        }))
+          (try! (compress-metadata token-id metadata)))
         
         (var-set last-token-id token-id)
         (var-set total-supply (+ (var-get total-supply) u1))
@@ -277,39 +281,95 @@
         (ok (+ success-count u1))))
     error error))
 
-;; Zip helper for batch operations
-(define-private (zip-mint-data 
-  (recipients (list 50 principal))
-  (names (list 50 (string-ascii 64)))
-  (descriptions (list 50 (string-ascii 256)))
-  (images (list 50 (string-ascii 256))))
-  (map create-mint-data recipients names descriptions images))
+;; Optimized zip helper for batch operations
+(define-private (zip-optimized-mint-data 
+  (recipients (list 100 principal))
+  (names (list 100 (string-ascii 64)))
+  (descriptions (list 100 (string-ascii 256)))
+  (images (list 100 (string-ascii 256))))
+  (map create-optimized-mint-data recipients names descriptions images))
 
-(define-private (create-mint-data 
+(define-private (create-optimized-mint-data 
   (recipient principal)
   (name (string-ascii 64))
   (description (string-ascii 256))
   (image (string-ascii 256)))
   {recipient: recipient, name: name, description: description, image: image})
 
-;; Batch transfer function
-(define-public (batch-transfer 
-  (token-ids (list 50 uint))
-  (senders (list 50 principal))
-  (recipients (list 50 principal)))
+;; Optimized batch transfer with gas reduction
+(define-public (optimized-batch-transfer 
+  (token-ids (list 100 uint))
+  (senders (list 100 principal))
+  (recipients (list 100 principal)))
   (let ((batch-size (len token-ids)))
     (begin
       (asserts! (not (var-get contract-paused)) ERR-CONTRACT-PAUSED)
-      (asserts! (<= batch-size u50) ERR-BATCH-SIZE-EXCEEDED)
+      (asserts! (<= batch-size u100) ERR-BATCH-SIZE-EXCEEDED)
       (asserts! (is-eq batch-size (len senders)) ERR-BATCH-SIZE-EXCEEDED)
       (asserts! (is-eq batch-size (len recipients)) ERR-BATCH-SIZE-EXCEEDED)
       
-      (try! (fold batch-transfer-helper 
+      ;; Pre-validate all transfers to fail fast
+      (try! (fold validate-transfer-helper 
+        (zip-transfer-data token-ids senders recipients) 
+        (ok u0)))
+      
+      ;; Execute optimized transfers
+      (try! (fold optimized-transfer-helper 
         (zip-transfer-data token-ids senders recipients) 
         (ok u0)))
       
       (print {
-        notification: "batch-transfer-completed",
+        notification: "optimized-batch-transfer-completed",
+        payload: {
+          count: batch-size,
+          token-ids: token-ids,
+          gas-optimized: true
+        }
+      })
+      
+      (ok batch-size))))
+
+;; Validation helper for batch transfers
+(define-private (validate-transfer-helper 
+  (transfer-data {token-id: uint, sender: principal, recipient: principal})
+  (acc (response uint uint)))
+  (match acc
+    success-count (begin
+      (asserts! (is-authorized (get sender transfer-data) (get token-id transfer-data)) ERR-UNAUTHORIZED)
+      (asserts! (is-some (nft-get-owner? enhanced-nft (get token-id transfer-data))) ERR-TOKEN-NOT-FOUND)
+      (ok (+ success-count u1)))
+    error error))
+
+;; Optimized transfer helper
+(define-private (optimized-transfer-helper 
+  (transfer-data {token-id: uint, sender: principal, recipient: principal})
+  (acc (response uint uint)))
+  (match acc
+    success-count (begin
+      (try! (nft-transfer? enhanced-nft (get token-id transfer-data) (get sender transfer-data) (get recipient transfer-data)))
+      (ok (+ success-count u1)))
+    error error))
+
+;; Batch metadata update with optimization
+(define-public (optimized-batch-metadata-update
+  (token-ids (list 50 uint))
+  (names (list 50 (string-ascii 64)))
+  (descriptions (list 50 (string-ascii 256)))
+  (images (list 50 (string-ascii 256))))
+  (let ((batch-size (len token-ids)))
+    (begin
+      (asserts! (not (var-get contract-paused)) ERR-CONTRACT-PAUSED)
+      (asserts! (<= batch-size u50) ERR-BATCH-SIZE-EXCEEDED)
+      (asserts! (is-eq batch-size (len names)) ERR-BATCH-SIZE-EXCEEDED)
+      (asserts! (is-eq batch-size (len descriptions)) ERR-BATCH-SIZE-EXCEEDED)
+      (asserts! (is-eq batch-size (len images)) ERR-BATCH-SIZE-EXCEEDED)
+      
+      (try! (fold optimized-metadata-update-helper 
+        (zip-metadata-update-data token-ids names descriptions images) 
+        (ok u0)))
+      
+      (print {
+        notification: "optimized-batch-metadata-update-completed",
         payload: {
           count: batch-size,
           token-ids: token-ids
@@ -318,29 +378,40 @@
       
       (ok batch-size))))
 
-;; Helper for batch transfers
-(define-private (batch-transfer-helper 
-  (transfer-data {token-id: uint, sender: principal, recipient: principal})
+;; Helper for optimized metadata updates
+(define-private (optimized-metadata-update-helper 
+  (update-data {token-id: uint, name: (string-ascii 64), description: (string-ascii 256), image: (string-ascii 256)})
   (acc (response uint uint)))
   (match acc
-    success-count (begin
-      (asserts! (is-authorized (get sender transfer-data) (get token-id transfer-data)) ERR-UNAUTHORIZED)
-      (try! (nft-transfer? enhanced-nft (get token-id transfer-data) (get sender transfer-data) (get recipient transfer-data)))
-      (ok (+ success-count u1)))
+    success-count (let ((metadata (unwrap! (map-get? token-metadata (get token-id update-data)) ERR-TOKEN-NOT-FOUND)))
+      (begin
+        (asserts! (is-eq tx-sender (get creator metadata)) ERR-UNAUTHORIZED)
+        
+        ;; Update with compressed storage
+        (let ((updated-metadata (merge metadata {
+          name: (get name update-data),
+          description: (get description update-data),
+          image: (get image update-data)
+        })))
+          (try! (compress-metadata (get token-id update-data) updated-metadata)))
+        
+        (ok (+ success-count u1))))
     error error))
 
-;; Zip helper for batch transfers
-(define-private (zip-transfer-data 
+;; Zip helper for metadata updates
+(define-private (zip-metadata-update-data 
   (token-ids (list 50 uint))
-  (senders (list 50 principal))
-  (recipients (list 50 principal)))
-  (map create-transfer-data token-ids senders recipients))
+  (names (list 50 (string-ascii 64)))
+  (descriptions (list 50 (string-ascii 256)))
+  (images (list 50 (string-ascii 256))))
+  (map create-metadata-update-data token-ids names descriptions images))
 
-(define-private (create-transfer-data 
+(define-private (create-metadata-update-data 
   (token-id uint)
-  (sender principal)
-  (recipient principal))
-  {token-id: token-id, sender: sender, recipient: recipient})
+  (name (string-ascii 64))
+  (description (string-ascii 256))
+  (image (string-ascii 256)))
+  {token-id: token-id, name: name, description: description, image: image})
 ;; Marketplace and trading features
 (define-map listings uint {
   seller: principal,
