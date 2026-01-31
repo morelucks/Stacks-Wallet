@@ -401,6 +401,125 @@
     
     (ok true)))
 
+;; Bridge analytics and monitoring
+(define-map bridge-analytics (string-ascii 32) {
+  daily-volume: uint,
+  weekly-volume: uint,
+  monthly-volume: uint,
+  average-completion-time: uint,
+  peak-usage-hour: uint,
+  total-fees-collected: uint,
+  unique-users: uint,
+  last-reset: uint
+})
+
+;; Real-time bridge monitoring
+(define-map bridge-health-metrics uint {
+  timestamp: uint,
+  active-requests: uint,
+  validator-count: uint,
+  average-response-time: uint,
+  error-rate: uint,
+  system-load: uint
+})
+
+(define-data-var next-health-metric-id uint u1)
+
+;; Record bridge health metrics
+(define-public (record-health-metrics 
+  (active-requests uint)
+  (validator-count uint)
+  (avg-response-time uint)
+  (error-rate uint))
+  (let ((metric-id (var-get next-health-metric-id)))
+    (begin
+      (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+      
+      (map-set bridge-health-metrics metric-id {
+        timestamp: block-height,
+        active-requests: active-requests,
+        validator-count: validator-count,
+        average-response-time: avg-response-time,
+        error-rate: error-rate,
+        system-load: (calculate-system-load active-requests validator-count)
+      })
+      
+      (var-set next-health-metric-id (+ metric-id u1))
+      
+      ;; Alert if system is under stress
+      (if (> (calculate-system-load active-requests validator-count) u80)
+        (print {
+          notification: "system-stress-alert",
+          payload: {
+            system-load: (calculate-system-load active-requests validator-count),
+            active-requests: active-requests,
+            validator-count: validator-count
+          }
+        })
+        (ok true))
+      
+      (ok metric-id))))
+
+;; Calculate system load percentage
+(define-private (calculate-system-load (active-requests uint) (validator-count uint))
+  (let ((max-capacity (* validator-count u10))) ;; Each validator can handle 10 concurrent requests
+    (if (is-eq max-capacity u0)
+      u100 ;; No validators = 100% load
+      (min (/ (* active-requests u100) max-capacity) u100))))
+
+;; Update bridge analytics
+(define-private (update-bridge-analytics (chain (string-ascii 32)) (fee-amount uint))
+  (let ((current-analytics (default-to {
+    daily-volume: u0,
+    weekly-volume: u0,
+    monthly-volume: u0,
+    average-completion-time: u0,
+    peak-usage-hour: u0,
+    total-fees-collected: u0,
+    unique-users: u0,
+    last-reset: block-height
+  } (map-get? bridge-analytics chain))))
+    (map-set bridge-analytics chain
+      (merge current-analytics {
+        daily-volume: (+ (get daily-volume current-analytics) u1),
+        weekly-volume: (+ (get weekly-volume current-analytics) u1),
+        monthly-volume: (+ (get monthly-volume current-analytics) u1),
+        total-fees-collected: (+ (get total-fees-collected current-analytics) fee-amount),
+        unique-users: (+ (get unique-users current-analytics) u1) ;; Simplified
+      }))))
+
+;; Get bridge analytics
+(define-read-only (get-bridge-analytics-detailed (chain (string-ascii 32)))
+  (map-get? bridge-analytics chain))
+
+;; Get recent health metrics
+(define-read-only (get-recent-health-metrics (count uint))
+  (let ((current-id (var-get next-health-metric-id)))
+    (if (> current-id count)
+      (get-health-metrics-range (- current-id count) current-id)
+      (get-health-metrics-range u1 current-id))))
+
+;; Helper to get health metrics in range
+(define-private (get-health-metrics-range (start-id uint) (end-id uint))
+  (fold collect-health-metric 
+    (generate-range start-id end-id) 
+    (list)))
+
+(define-private (collect-health-metric (metric-id uint) (acc (list 10 {timestamp: uint, system-load: uint})))
+  (match (map-get? bridge-health-metrics metric-id)
+    metric (unwrap-panic (as-max-len? 
+      (append acc {
+        timestamp: (get timestamp metric),
+        system-load: (get system-load metric)
+      }) u10))
+    acc))
+
+;; Generate range helper
+(define-private (generate-range (start uint) (end uint))
+  (if (>= start end)
+    (list)
+    (unwrap-panic (as-max-len? (append (generate-range start (- end u1)) (- end u1)) u10))))
+
 ;; Enhanced batch bridge operations with gas optimization
 (define-map batch-operations uint {
   batch-id: uint,
