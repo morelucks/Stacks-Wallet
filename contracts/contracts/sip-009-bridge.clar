@@ -401,6 +401,208 @@
     
     (ok true)))
 
+;; Bridge insurance and risk management
+(define-map insurance-policies uint {
+  policy-holder: principal,
+  coverage-amount: uint,
+  premium-paid: uint,
+  policy-start: uint,
+  policy-end: uint,
+  coverage-type: (string-ascii 32), ;; "bridge-failure", "validator-misbehavior", "smart-contract-bug"
+  active: bool,
+  claims-count: uint
+})
+
+(define-map insurance-claims uint {
+  policy-id: uint,
+  claimant: principal,
+  claim-amount: uint,
+  incident-type: (string-ascii 32),
+  evidence-hash: (buff 32),
+  claim-status: (string-ascii 16), ;; "pending", "investigating", "approved", "rejected", "paid"
+  filed-at: uint,
+  processed-at: (optional uint),
+  payout-amount: (optional uint)
+})
+
+(define-data-var next-policy-id uint u1)
+(define-data-var next-claim-id uint u1)
+(define-data-var insurance-pool-balance uint u0)
+(define-data-var total-coverage-issued uint u0)
+
+;; Purchase bridge insurance
+(define-public (purchase-insurance 
+  (coverage-amount uint)
+  (coverage-type (string-ascii 32))
+  (duration-blocks uint))
+  (let ((policy-id (var-get next-policy-id))
+        (premium (calculate-insurance-premium coverage-amount coverage-type duration-blocks)))
+    (begin
+      (asserts! (>= (stx-get-balance tx-sender) premium) ERR-INSUFFICIENT-BALANCE)
+      (asserts! (<= coverage-amount u100000000000) ERR-INVALID-REQUEST) ;; Max 100k STX coverage
+      
+      ;; Pay premium to insurance pool
+      (try! (stx-transfer? premium tx-sender (as-contract tx-sender)))
+      (var-set insurance-pool-balance (+ (var-get insurance-pool-balance) premium))
+      
+      ;; Create policy
+      (map-set insurance-policies policy-id {
+        policy-holder: tx-sender,
+        coverage-amount: coverage-amount,
+        premium-paid: premium,
+        policy-start: block-height,
+        policy-end: (+ block-height duration-blocks),
+        coverage-type: coverage-type,
+        active: true,
+        claims-count: u0
+      })
+      
+      (var-set next-policy-id (+ policy-id u1))
+      (var-set total-coverage-issued (+ (var-get total-coverage-issued) coverage-amount))
+      
+      (print {
+        notification: "insurance-purchased",
+        payload: {
+          policy-id: policy-id,
+          coverage-amount: coverage-amount,
+          premium-paid: premium,
+          coverage-type: coverage-type
+        }
+      })
+      
+      (ok policy-id))))
+
+;; Calculate insurance premium based on risk factors
+(define-private (calculate-insurance-premium 
+  (coverage-amount uint)
+  (coverage-type (string-ascii 32))
+  (duration-blocks uint))
+  (let ((base-rate (get-base-insurance-rate coverage-type))
+        (duration-factor (/ duration-blocks u144)) ;; Per day
+        (coverage-factor (/ coverage-amount u1000000))) ;; Per STX
+    (* (* base-rate duration-factor) coverage-factor)))
+
+;; Get base insurance rate by coverage type
+(define-private (get-base-insurance-rate (coverage-type (string-ascii 32)))
+  (if (is-eq coverage-type "bridge-failure")
+    u1000 ;; 0.001 STX base rate
+    (if (is-eq coverage-type "validator-misbehavior")
+      u2000 ;; 0.002 STX base rate (higher risk)
+      u1500))) ;; 0.0015 STX base rate for smart contract bugs
+
+;; File insurance claim
+(define-public (file-insurance-claim 
+  (policy-id uint)
+  (claim-amount uint)
+  (incident-type (string-ascii 32))
+  (evidence-hash (buff 32)))
+  (let ((policy (unwrap! (map-get? insurance-policies policy-id) ERR-INVALID-REQUEST))
+        (claim-id (var-get next-claim-id)))
+    (begin
+      (asserts! (is-eq (get policy-holder policy) tx-sender) ERR-NOT-AUTHORIZED)
+      (asserts! (get active policy) ERR-INVALID-REQUEST)
+      (asserts! (< block-height (get policy-end policy)) ERR-REQUEST-EXPIRED)
+      (asserts! (<= claim-amount (get coverage-amount policy)) ERR-INVALID-REQUEST)
+      (asserts! (is-eq (get coverage-type policy) incident-type) ERR-INVALID-REQUEST)
+      
+      ;; Create claim
+      (map-set insurance-claims claim-id {
+        policy-id: policy-id,
+        claimant: tx-sender,
+        claim-amount: claim-amount,
+        incident-type: incident-type,
+        evidence-hash: evidence-hash,
+        claim-status: "pending",
+        filed-at: block-height,
+        processed-at: none,
+        payout-amount: none
+      })
+      
+      (var-set next-claim-id (+ claim-id u1))
+      
+      ;; Update policy claims count
+      (map-set insurance-policies policy-id
+        (merge policy {
+          claims-count: (+ (get claims-count policy) u1)
+        }))
+      
+      (print {
+        notification: "insurance-claim-filed",
+        payload: {
+          claim-id: claim-id,
+          policy-id: policy-id,
+          claim-amount: claim-amount,
+          incident-type: incident-type
+        }
+      })
+      
+      (ok claim-id))))
+
+;; Process insurance claim (admin function)
+(define-public (process-insurance-claim 
+  (claim-id uint)
+  (approved bool)
+  (payout-amount uint))
+  (let ((claim (unwrap! (map-get? insurance-claims claim-id) ERR-INVALID-REQUEST)))
+    (begin
+      (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+      (asserts! (is-eq (get claim-status claim) "pending") ERR-INVALID-REQUEST)
+      
+      (if approved
+        (begin
+          (asserts! (<= payout-amount (get claim-amount claim)) ERR-INVALID-REQUEST)
+          (asserts! (>= (var-get insurance-pool-balance) payout-amount) ERR-INSUFFICIENT-BALANCE)
+          
+          ;; Pay out claim
+          (try! (as-contract (stx-transfer? payout-amount tx-sender (get claimant claim))))
+          (var-set insurance-pool-balance (- (var-get insurance-pool-balance) payout-amount))
+          
+          ;; Update claim status
+          (map-set insurance-claims claim-id
+            (merge claim {
+              claim-status: "approved",
+              processed-at: (some block-height),
+              payout-amount: (some payout-amount)
+            })))
+        ;; Reject claim
+        (map-set insurance-claims claim-id
+          (merge claim {
+            claim-status: "rejected",
+            processed-at: (some block-height),
+            payout-amount: (some u0)
+          })))
+      
+      (print {
+        notification: "insurance-claim-processed",
+        payload: {
+          claim-id: claim-id,
+          approved: approved,
+          payout-amount: (if approved payout-amount u0)
+        }
+      })
+      
+      (ok true))))
+
+;; Get insurance policy details
+(define-read-only (get-insurance-policy (policy-id uint))
+  (map-get? insurance-policies policy-id))
+
+;; Get insurance claim details
+(define-read-only (get-insurance-claim (claim-id uint))
+  (map-get? insurance-claims claim-id))
+
+;; Get insurance pool status
+(define-read-only (get-insurance-pool-status)
+  {
+    pool-balance: (var-get insurance-pool-balance),
+    total-coverage-issued: (var-get total-coverage-issued),
+    coverage-ratio: (if (> (var-get total-coverage-issued) u0)
+      (/ (* (var-get insurance-pool-balance) u100) (var-get total-coverage-issued))
+      u100),
+    next-policy-id: (var-get next-policy-id),
+    next-claim-id: (var-get next-claim-id)
+  })
+
 ;; Bridge governance and voting system
 (define-map governance-proposals uint {
   proposal-type: (string-ascii 32), ;; "fee-change", "validator-add", "chain-add", "parameter-update"
