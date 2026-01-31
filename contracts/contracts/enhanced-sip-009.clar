@@ -2481,21 +2481,90 @@
     export-enabled: (var-get export-enabled)
   })
 
-;; Set export enabled status
-(define-public (set-export-enabled (enabled bool))
+;; Administrative Utility Functions
+(define-public (batch-update-contract-settings 
+  (settings (list 10 {key: (string-ascii 32), value: uint})))
   (begin
     (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-OWNER-ONLY)
-    (var-set export-enabled enabled)
+    
+    (try! (fold update-single-setting settings (ok u0)))
     
     (print {
-      notification: "export-status-changed",
+      notification: "batch-settings-updated",
       payload: {
-        enabled: enabled,
-        changed-by: tx-sender
+        settings-count: (len settings),
+        updated-by: tx-sender,
+        updated-at: block-height
       }
     })
     
-    (ok true)))
+    (ok (len settings))))
+
+(define-private (update-single-setting 
+  (setting {key: (string-ascii 32), value: uint})
+  (acc (response uint uint)))
+  (match acc
+    success-count (let ((key (get key setting))
+                        (value (get value setting)))
+      (begin
+        (if (is-eq key "trading-fee")
+          (var-set trading-fee-percentage value)
+          (if (is-eq key "cache-enabled")
+            (var-set cache-enabled (> value u0))
+            (if (is-eq key "analytics-enabled")
+              (var-set analytics-enabled (> value u0))
+              (ok false))))
+        (ok (+ success-count u1))))
+    error error))
+
+;; Enhanced contract statistics
+(define-read-only (get-enhanced-contract-stats)
+  {
+    basic-stats: (get-contract-stats),
+    security-stats: (get-security-status),
+    analytics-stats: {
+      current-period: (var-get current-metrics-period),
+      analytics-enabled: (var-get analytics-enabled)
+    },
+    cache-stats: (get-cache-stats),
+    multisig-stats: (get-multisig-status),
+    export-stats: (get-export-statistics)
+  })
+
+;; Bulk token operations
+(define-public (bulk-token-operations 
+  (operations (list 20 {operation: (string-ascii 16), token-id: uint, params: (string-ascii 128)})))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-OWNER-ONLY)
+    (asserts! (<= (len operations) u20) ERR-BATCH-SIZE-EXCEEDED)
+    
+    (try! (fold execute-bulk-operation operations (ok u0)))
+    
+    (print {
+      notification: "bulk-operations-completed",
+      payload: {
+        operations-count: (len operations),
+        executed-by: tx-sender
+      }
+    })
+    
+    (ok (len operations))))
+
+(define-private (execute-bulk-operation 
+  (operation {operation: (string-ascii 16), token-id: uint, params: (string-ascii 128)})
+  (acc (response uint uint)))
+  (match acc
+    success-count (let ((op-type (get operation operation))
+                        (token-id (get token-id operation)))
+      (begin
+        ;; Execute different operations based on type
+        (if (is-eq op-type "burn")
+          (try! (burn-token token-id))
+          (if (is-eq op-type "serialize")
+            (try! (serialize-token-metadata token-id))
+            (ok true)))
+        (ok (+ success-count u1))))
+    error error))
 (define-map listings uint {
   seller: principal,
   price: uint,
