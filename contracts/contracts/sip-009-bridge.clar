@@ -401,6 +401,198 @@
     
     (ok true)))
 
+;; Bridge documentation and help system
+(define-map documentation-entries (string-ascii 64) {
+  title: (string-ascii 128),
+  content: (string-ascii 1024),
+  category: (string-ascii 32), ;; "user-guide", "api-docs", "troubleshooting", "faq"
+  version: (string-ascii 16),
+  last-updated: uint,
+  author: principal,
+  view-count: uint
+})
+
+(define-map help-requests uint {
+  user: principal,
+  request-type: (string-ascii 32), ;; "technical", "account", "transaction", "general"
+  subject: (string-ascii 128),
+  description: (string-ascii 512),
+  priority: uint,
+  status: (string-ascii 16), ;; "open", "in-progress", "resolved", "closed"
+  created-at: uint,
+  assigned-to: (optional principal),
+  resolution: (optional (string-ascii 512))
+})
+
+(define-data-var next-help-request-id uint u1)
+(define-data-var help-system-enabled bool true)
+
+;; Add documentation entry
+(define-public (add-documentation 
+  (doc-key (string-ascii 64))
+  (title (string-ascii 128))
+  (content (string-ascii 1024))
+  (category (string-ascii 32))
+  (version (string-ascii 16)))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+    
+    (map-set documentation-entries doc-key {
+      title: title,
+      content: content,
+      category: category,
+      version: version,
+      last-updated: block-height,
+      author: tx-sender,
+      view-count: u0
+    })
+    
+    (print {
+      notification: "documentation-added",
+      payload: {
+        doc-key: doc-key,
+        title: title,
+        category: category,
+        version: version
+      }
+    })
+    
+    (ok true)))
+
+;; Get documentation with view tracking
+(define-read-only (get-documentation (doc-key (string-ascii 64)))
+  (match (map-get? documentation-entries doc-key)
+    doc-entry (begin
+      ;; Would increment view count in a public function
+      (some {
+        title: (get title doc-entry),
+        content: (get content doc-entry),
+        category: (get category doc-entry),
+        version: (get version doc-entry),
+        last-updated: (get last-updated doc-entry),
+        view-count: (get view-count doc-entry)
+      }))
+    none))
+
+;; Submit help request
+(define-public (submit-help-request 
+  (request-type (string-ascii 32))
+  (subject (string-ascii 128))
+  (description (string-ascii 512))
+  (priority uint))
+  (let ((request-id (var-get next-help-request-id)))
+    (begin
+      (asserts! (var-get help-system-enabled) ERR-BRIDGE-DISABLED)
+      (asserts! (and (>= priority u1) (<= priority u5)) ERR-INVALID-REQUEST)
+      
+      (map-set help-requests request-id {
+        user: tx-sender,
+        request-type: request-type,
+        subject: subject,
+        description: description,
+        priority: priority,
+        status: "open",
+        created-at: block-height,
+        assigned-to: none,
+        resolution: none
+      })
+      
+      (var-set next-help-request-id (+ request-id u1))
+      
+      (print {
+        notification: "help-request-submitted",
+        payload: {
+          request-id: request-id,
+          user: tx-sender,
+          request-type: request-type,
+          priority: priority
+        }
+      })
+      
+      (ok request-id))))
+
+;; Update help request status
+(define-public (update-help-request 
+  (request-id uint)
+  (new-status (string-ascii 16))
+  (assigned-to (optional principal))
+  (resolution (optional (string-ascii 512))))
+  (let ((request (unwrap! (map-get? help-requests request-id) ERR-INVALID-REQUEST)))
+    (begin
+      (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+      
+      (map-set help-requests request-id
+        (merge request {
+          status: new-status,
+          assigned-to: assigned-to,
+          resolution: resolution
+        }))
+      
+      (print {
+        notification: "help-request-updated",
+        payload: {
+          request-id: request-id,
+          new-status: new-status,
+          assigned-to: assigned-to
+        }
+      })
+      
+      (ok true))))
+
+;; Get help request
+(define-read-only (get-help-request (request-id uint))
+  (map-get? help-requests request-id))
+
+;; Search documentation
+(define-read-only (search-documentation (category (string-ascii 32)))
+  ;; Simplified search - would return matching documents
+  (list "bridge-user-guide" "api-reference" "troubleshooting-guide"))
+
+;; Get bridge help summary
+(define-read-only (get-help-summary)
+  {
+    help-system-enabled: (var-get help-system-enabled),
+    total-help-requests: (- (var-get next-help-request-id) u1),
+    documentation-categories: (list "user-guide" "api-docs" "troubleshooting" "faq")
+  })
+
+;; Initialize core documentation
+(define-private (initialize-core-docs)
+  (begin
+    ;; User Guide
+    (try! (add-documentation 
+      "bridge-user-guide"
+      "SIP-009 Bridge User Guide"
+      "Complete guide for using the SIP-009 cross-chain bridge. Covers account setup, bridge operations, fees, and security best practices."
+      "user-guide"
+      "1.0"))
+    
+    ;; API Documentation
+    (try! (add-documentation
+      "api-reference"
+      "Bridge API Reference"
+      "Technical documentation for bridge API endpoints, authentication, rate limits, and integration examples."
+      "api-docs"
+      "1.0"))
+    
+    ;; Troubleshooting Guide
+    (try! (add-documentation
+      "troubleshooting-guide"
+      "Bridge Troubleshooting Guide"
+      "Common issues and solutions for bridge operations, including failed transactions, validator issues, and recovery procedures."
+      "troubleshooting"
+      "1.0"))
+    
+    ;; FAQ
+    (try! (add-documentation
+      "bridge-faq"
+      "Bridge Frequently Asked Questions"
+      "Answers to common questions about bridge fees, supported chains, security measures, and operational procedures."
+      "faq"
+      "1.0"))
+    
+    (ok true)))
+
 ;; Bridge emergency response and circuit breaker system
 (define-map emergency-protocols uint {
   protocol-name: (string-ascii 32),
