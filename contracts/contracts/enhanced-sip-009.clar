@@ -1964,13 +1964,309 @@
     signer-info (get active signer-info)
     false))
 
-;; Get multi-sig system status
-(define-read-only (get-multisig-status)
-  {
-    enabled: (var-get multisig-enabled),
-    required-signers: (var-get required-signers-count),
-    total-proposals: (- (var-get next-multisig-proposal-id) u1)
-  })
+;; Analytics Engine - Comprehensive Metrics Tracking
+(define-map trading-metrics uint {
+  total-volume: uint,
+  transaction-count: uint,
+  average-price: uint,
+  highest-sale: uint,
+  lowest-sale: uint,
+  unique-traders: uint,
+  period-start: uint,
+  period-end: uint
+})
+
+(define-map user-behavior-metrics principal {
+  total-transactions: uint,
+  total-volume: uint,
+  nfts-owned: uint,
+  nfts-created: uint,
+  last-activity: uint,
+  activity-score: uint,
+  preferred-categories: (list 5 (string-ascii 32))
+})
+
+(define-map price-history uint (list 100 {
+  price: uint,
+  timestamp: uint,
+  transaction-type: (string-ascii 32),
+  buyer: principal,
+  seller: principal
+}))
+
+(define-map market-trends uint {
+  trend-type: (string-ascii 32),
+  value: uint,
+  change-percentage: int,
+  calculated-at: uint,
+  confidence-score: uint
+})
+
+(define-data-var current-metrics-period uint u1)
+(define-data-var analytics-enabled bool true)
+(define-data-var next-trend-id uint u1)
+
+;; Track trading transaction
+(define-private (track-trading-transaction 
+  (token-id uint)
+  (price uint)
+  (transaction-type (string-ascii 32))
+  (buyer principal)
+  (seller principal))
+  (let ((current-period (var-get current-metrics-period))
+        (current-metrics (default-to {
+          total-volume: u0,
+          transaction-count: u0,
+          average-price: u0,
+          highest-sale: u0,
+          lowest-sale: u999999999,
+          unique-traders: u0,
+          period-start: block-height,
+          period-end: (+ block-height u1000)
+        } (map-get? trading-metrics current-period))))
+    (begin
+      ;; Update trading metrics
+      (let ((new-volume (+ (get total-volume current-metrics) price))
+            (new-count (+ (get transaction-count current-metrics) u1))
+            (new-highest (if (> price (get highest-sale current-metrics)) price (get highest-sale current-metrics)))
+            (new-lowest (if (< price (get lowest-sale current-metrics)) price (get lowest-sale current-metrics))))
+        (begin
+          (map-set trading-metrics current-period (merge current-metrics {
+            total-volume: new-volume,
+            transaction-count: new-count,
+            average-price: (/ new-volume new-count),
+            highest-sale: new-highest,
+            lowest-sale: new-lowest
+          }))
+          
+          ;; Update price history
+          (try! (update-price-history token-id price transaction-type buyer seller))
+          
+          ;; Update user behavior metrics
+          (try! (update-user-behavior buyer "purchase" price))
+          (try! (update-user-behavior seller "sale" price))
+          
+          (ok true)))))
+
+;; Update price history
+(define-private (update-price-history 
+  (token-id uint)
+  (price uint)
+  (transaction-type (string-ascii 32))
+  (buyer principal)
+  (seller principal))
+  (let ((current-history (default-to (list) (map-get? price-history token-id)))
+        (new-entry {
+          price: price,
+          timestamp: block-height,
+          transaction-type: transaction-type,
+          buyer: buyer,
+          seller: seller
+        }))
+    (begin
+      (map-set price-history token-id 
+        (unwrap-panic (as-max-len? (append current-history new-entry) u100)))
+      (ok true))))
+
+;; Update user behavior metrics
+(define-private (update-user-behavior 
+  (user principal)
+  (activity-type (string-ascii 32))
+  (value uint))
+  (let ((current-behavior (default-to {
+    total-transactions: u0,
+    total-volume: u0,
+    nfts-owned: u0,
+    nfts-created: u0,
+    last-activity: u0,
+    activity-score: u0,
+    preferred-categories: (list)
+  } (map-get? user-behavior-metrics user))))
+    (let ((new-transactions (+ (get total-transactions current-behavior) u1))
+          (new-volume (+ (get total-volume current-behavior) value))
+          (new-activity-score (calculate-activity-score new-transactions new-volume)))
+      (begin
+        (map-set user-behavior-metrics user (merge current-behavior {
+          total-transactions: new-transactions,
+          total-volume: new-volume,
+          last-activity: block-height,
+          activity-score: new-activity-score
+        }))
+        (ok true)))))
+
+;; Calculate activity score
+(define-private (calculate-activity-score (transactions uint) (volume uint))
+  (let ((transaction-score (* transactions u10))
+        (volume-score (/ volume u1000000))) ;; Normalize volume
+    (+ transaction-score volume-score)))
+
+;; Calculate market trends
+(define-public (calculate-market-trends)
+  (let ((current-period (var-get current-metrics-period))
+        (current-metrics (map-get? trading-metrics current-period))
+        (previous-metrics (map-get? trading-metrics (- current-period u1))))
+    (begin
+      (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-OWNER-ONLY)
+      (asserts! (var-get analytics-enabled) ERR-CONTRACT-PAUSED)
+      
+      (match current-metrics
+        current (match previous-metrics
+          previous (let ((volume-change (calculate-percentage-change 
+                          (get total-volume previous) 
+                          (get total-volume current)))
+                        (price-change (calculate-percentage-change 
+                          (get average-price previous) 
+                          (get average-price current)))
+                        (trend-id (var-get next-trend-id)))
+            (begin
+              ;; Store volume trend
+              (map-set market-trends trend-id {
+                trend-type: "volume",
+                value: (get total-volume current),
+                change-percentage: volume-change,
+                calculated-at: block-height,
+                confidence-score: u85
+              })
+              
+              ;; Store price trend
+              (map-set market-trends (+ trend-id u1) {
+                trend-type: "price",
+                value: (get average-price current),
+                change-percentage: price-change,
+                calculated-at: block-height,
+                confidence-score: u90
+              })
+              
+              (var-set next-trend-id (+ trend-id u2))
+              
+              (print {
+                notification: "market-trends-calculated",
+                payload: {
+                  volume-change: volume-change,
+                  price-change: price-change,
+                  calculated-at: block-height
+                }
+              })
+              
+              (ok true)))
+          (err ERR-TOKEN-NOT-FOUND))
+        (err ERR-TOKEN-NOT-FOUND)))))
+
+;; Calculate percentage change
+(define-private (calculate-percentage-change (old-value uint) (new-value uint))
+  (if (is-eq old-value u0)
+    0
+    (let ((difference (if (> new-value old-value) 
+                        (- new-value old-value) 
+                        (- old-value new-value)))
+          (percentage (/ (* difference u100) old-value)))
+      (if (> new-value old-value) 
+        (to-int percentage) 
+        (- (to-int percentage))))))
+
+;; Enhanced auction bid with analytics
+(define-public (bid-dutch-auction-with-analytics (auction-id uint))
+  (let ((auction (unwrap! (map-get? dutch-auctions auction-id) ERR-TOKEN-NOT-FOUND))
+        (current-price (get-dutch-auction-price auction-id)))
+    (begin
+      (asserts! (get active auction) ERR-UNAUTHORIZED)
+      (asserts! (< block-height (get end-block auction)) ERR-UNAUTHORIZED)
+      (asserts! (not (is-eq tx-sender (get seller auction))) ERR-UNAUTHORIZED)
+      
+      ;; Track analytics
+      (if (var-get analytics-enabled)
+        (try! (track-trading-transaction 
+          (get token-id auction) 
+          current-price 
+          "dutch-auction" 
+          tx-sender 
+          (get seller auction)))
+        (ok true))
+      
+      ;; Transfer NFT to buyer
+      (try! (nft-transfer? enhanced-nft (get token-id auction) (get seller auction) tx-sender))
+      
+      ;; Mark auction as inactive
+      (map-set dutch-auctions auction-id (merge auction {active: false}))
+      
+      (print {
+        notification: "dutch-auction-completed-with-analytics",
+        payload: {
+          auction-id: auction-id,
+          token-id: (get token-id auction),
+          buyer: tx-sender,
+          final-price: current-price,
+          analytics-tracked: (var-get analytics-enabled)
+        }
+      })
+      
+      (ok current-price))))
+
+;; Get trading metrics for period
+(define-read-only (get-trading-metrics (period uint))
+  (map-get? trading-metrics period))
+
+;; Get user behavior metrics
+(define-read-only (get-user-behavior (user principal))
+  (map-get? user-behavior-metrics user))
+
+;; Get price history for token
+(define-read-only (get-price-history (token-id uint))
+  (map-get? price-history token-id))
+
+;; Get market trend
+(define-read-only (get-market-trend (trend-id uint))
+  (map-get? market-trends trend-id))
+
+;; Get current period metrics summary
+(define-read-only (get-current-metrics-summary)
+  (let ((current-period (var-get current-metrics-period)))
+    (match (map-get? trading-metrics current-period)
+      metrics {
+        period: current-period,
+        metrics: metrics,
+        analytics-enabled: (var-get analytics-enabled)
+      }
+      {
+        period: current-period,
+        metrics: none,
+        analytics-enabled: (var-get analytics-enabled)
+      })))
+
+;; Start new metrics period
+(define-public (start-new-metrics-period)
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-OWNER-ONLY)
+    
+    (let ((new-period (+ (var-get current-metrics-period) u1)))
+      (begin
+        (var-set current-metrics-period new-period)
+        
+        (print {
+          notification: "new-metrics-period-started",
+          payload: {
+            period: new-period,
+            started-at: block-height
+          }
+        })
+        
+        (ok new-period)))))
+
+;; Toggle analytics
+(define-public (set-analytics-enabled (enabled bool))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-OWNER-ONLY)
+    (var-set analytics-enabled enabled)
+    
+    (print {
+      notification: "analytics-status-changed",
+      payload: {
+        enabled: enabled,
+        changed-by: tx-sender
+      }
+    })
+    
+    (ok true)))
 (define-map listings uint {
   seller: principal,
   price: uint,
