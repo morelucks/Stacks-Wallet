@@ -401,6 +401,133 @@
     
     (ok true)))
 
+;; Enhanced batch bridge operations with gas optimization
+(define-map batch-operations uint {
+  batch-id: uint,
+  total-requests: uint,
+  completed-requests: uint,
+  failed-requests: uint,
+  batch-status: (string-ascii 16), ;; pending, processing, completed, failed
+  created-at: uint,
+  total-fee-paid: uint,
+  gas-saved: uint
+})
+
+(define-data-var next-batch-id uint u1)
+
+;; Optimized batch bridge requests
+(define-public (batch-initiate-bridge-requests-optimized
+  (requests (list 20 {token-id: uint, target-chain: (string-ascii 32), target-address: (string-ascii 64)})))
+  (let ((batch-id (var-get next-batch-id))
+        (total-fee (fold calculate-batch-fee requests u0))
+        (batch-discount (calculate-batch-discount (len requests))))
+    (begin
+      (asserts! (>= (len requests) u2) ERR-INVALID-REQUEST) ;; Minimum 2 for batch
+      (asserts! (>= (stx-get-balance tx-sender) (- total-fee batch-discount)) ERR-INSUFFICIENT-BALANCE)
+      
+      ;; Apply batch discount
+      (try! (stx-transfer? (- total-fee batch-discount) tx-sender CONTRACT-OWNER))
+      
+      ;; Create batch record
+      (map-set batch-operations batch-id {
+        batch-id: batch-id,
+        total-requests: (len requests),
+        completed-requests: u0,
+        failed-requests: u0,
+        batch-status: "pending",
+        created-at: block-height,
+        total-fee-paid: (- total-fee batch-discount),
+        gas-saved: batch-discount
+      })
+      
+      (var-set next-batch-id (+ batch-id u1))
+      
+      ;; Process batch requests
+      (let ((result (fold process-batch-request-optimized requests (ok {batch-id: batch-id, request-ids: (list)}))))
+        (match result
+          success (begin
+            (map-set batch-operations batch-id
+              (merge (unwrap-panic (map-get? batch-operations batch-id)) {
+                batch-status: "processing"
+              }))
+            (print {
+              notification: "batch-bridge-initiated",
+              payload: {
+                batch-id: batch-id,
+                total-requests: (len requests),
+                gas-saved: batch-discount,
+                request-ids: (get request-ids success)
+              }
+            })
+            (ok batch-id))
+          error (err error))))))
+
+;; Calculate batch discount based on size
+(define-private (calculate-batch-discount (batch-size uint))
+  (if (>= batch-size u10)
+    u2000000  ;; 2 STX discount for 10+ items
+    (if (>= batch-size u5)
+      u1000000  ;; 1 STX discount for 5+ items
+      u500000))) ;; 0.5 STX discount for 2+ items
+
+;; Optimized batch request processor
+(define-private (process-batch-request-optimized
+  (request {token-id: uint, target-chain: (string-ascii 32), target-address: (string-ascii 64)})
+  (acc (response {batch-id: uint, request-ids: (list 20 uint)} uint)))
+  (match acc
+    success-data (match (initiate-bridge-request-internal
+                          (get token-id request)
+                          (get target-chain request)
+                          (get target-address request)
+                          (get batch-id success-data))
+                   request-id (ok {
+                     batch-id: (get batch-id success-data),
+                     request-ids: (unwrap-panic (as-max-len? 
+                       (append (get request-ids success-data) request-id) u20))
+                   })
+                   error (err error))
+    error (err error)))
+
+;; Internal bridge request function for batch processing
+(define-private (initiate-bridge-request-internal
+  (token-id uint)
+  (target-chain (string-ascii 32))
+  (target-address (string-ascii 64))
+  (batch-id uint))
+  (let ((request-id (var-get next-bridge-request-id))
+        (chain-config (unwrap! (map-get? chain-configs target-chain) ERR-INVALID-CHAIN)))
+    (begin
+      (asserts! (var-get bridge-enabled) ERR-BRIDGE-DISABLED)
+      (asserts! (get active chain-config) ERR-INVALID-CHAIN)
+      (asserts! (is-token-owner token-id tx-sender) ERR-NOT-AUTHORIZED)
+      
+      ;; Lock the token
+      (try! (lock-token token-id request-id))
+      
+      ;; Generate cryptographic proof
+      (let ((proof-info (generate-transfer-proof token-id tx-sender target-chain)))
+        ;; Create bridge request with batch reference
+        (map-set bridge-requests request-id {
+          token-id: token-id,
+          owner: tx-sender,
+          target-chain: target-chain,
+          target-address: target-address,
+          status: "pending",
+          created-at: block-height,
+          confirmed-at: none,
+          validator-signatures: (list),
+          proof-hash: (some (get proof-hash proof-info)),
+          merkle-root: (some (get merkle-root proof-info)),
+          proof-data: (some (get proof-data proof-info))
+        }))
+      
+      (var-set next-bridge-request-id (+ request-id u1))
+      (ok request-id))))
+
+;; Get batch operation status
+(define-read-only (get-batch-status (batch-id uint))
+  (map-get? batch-operations batch-id))
+
 ;; Multi-chain routing system
 (define-map bridge-routes {source-chain: (string-ascii 32), target-chain: (string-ascii 32)} {
   active: bool,
