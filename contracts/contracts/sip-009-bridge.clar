@@ -475,7 +475,12 @@
       active: true,
       added-at: block-height,
       total-validations: u0,
-      reputation-score: u100
+      reputation-score: u100,
+      successful-validations: u0,
+      failed-validations: u0,
+      last-validation: u0,
+      stake-amount: u0,
+      slashing-count: u0
     })
     
     (print {
