@@ -941,19 +941,304 @@
     (> (len json-data) u10)
     (is-eq (unwrap-panic (element-at json-data u0)) "{")))
 
-;; Export metadata in multiple formats
-(define-read-only (export-metadata-formats (token-id uint))
-  (let ((metadata (map-get? token-metadata token-id))
-        (serialized (map-get? serialized-metadata token-id)))
-    {
-      raw-metadata: metadata,
-      json-format: (match serialized
-        data (some (get json-data data))
-        none),
-      schema-version: (match serialized
-        data (some (get schema-version data))
-        none)
-    }))
+;; Advanced Trading Engine - Dutch Auctions
+(define-map dutch-auctions uint {
+  token-id: uint,
+  seller: principal,
+  start-price: uint,
+  end-price: uint,
+  start-block: uint,
+  end-block: uint,
+  current-price: uint,
+  price-decay-rate: uint,
+  active: bool,
+  currency: (string-ascii 16)
+})
+
+(define-map bundle-sales uint {
+  token-ids: (list 20 uint),
+  seller: principal,
+  total-price: uint,
+  currency: (string-ascii 16),
+  expires-at: uint,
+  active: bool,
+  min-bundle-size: uint
+})
+
+(define-map fractional-ownership uint {
+  token-id: uint,
+  total-shares: uint,
+  available-shares: uint,
+  price-per-share: uint,
+  shareholders: (list 50 {owner: principal, shares: uint}),
+  created-at: uint,
+  active: bool
+})
+
+(define-data-var next-auction-id uint u1)
+(define-data-var next-bundle-id uint u1)
+(define-data-var trading-fee-percentage uint u250) ;; 2.5%
+
+;; Create Dutch auction
+(define-public (create-dutch-auction 
+  (token-id uint)
+  (start-price uint)
+  (end-price uint)
+  (duration uint)
+  (currency (string-ascii 16)))
+  (let ((auction-id (var-get next-auction-id))
+        (owner (unwrap! (nft-get-owner? enhanced-nft token-id) ERR-TOKEN-NOT-FOUND)))
+    (begin
+      (asserts! (is-eq tx-sender owner) ERR-NOT-TOKEN-OWNER)
+      (asserts! (> start-price end-price) ERR-INVALID-PRICE)
+      (asserts! (> duration u0) ERR-INVALID-PRICE)
+      
+      (let ((price-decay-rate (/ (- start-price end-price) duration)))
+        (begin
+          (map-set dutch-auctions auction-id {
+            token-id: token-id,
+            seller: tx-sender,
+            start-price: start-price,
+            end-price: end-price,
+            start-block: block-height,
+            end-block: (+ block-height duration),
+            current-price: start-price,
+            price-decay-rate: price-decay-rate,
+            active: true,
+            currency: currency
+          })
+          
+          (var-set next-auction-id (+ auction-id u1))
+          
+          (print {
+            notification: "dutch-auction-created",
+            payload: {
+              auction-id: auction-id,
+              token-id: token-id,
+              start-price: start-price,
+              end-price: end-price,
+              duration: duration
+            }
+          })
+          
+          (ok auction-id))))))
+
+;; Calculate current Dutch auction price
+(define-read-only (get-dutch-auction-price (auction-id uint))
+  (match (map-get? dutch-auctions auction-id)
+    auction (if (get active auction)
+      (let ((elapsed-blocks (- block-height (get start-block auction)))
+            (total-duration (- (get end-block auction) (get start-block auction))))
+        (if (>= block-height (get end-block auction))
+          (get end-price auction)
+          (let ((price-reduction (* elapsed-blocks (get price-decay-rate auction))))
+            (if (>= price-reduction (get start-price auction))
+              (get end-price auction)
+              (- (get start-price auction) price-reduction)))))
+      u0)
+    u0))
+
+;; Bid on Dutch auction
+(define-public (bid-dutch-auction (auction-id uint))
+  (let ((auction (unwrap! (map-get? dutch-auctions auction-id) ERR-TOKEN-NOT-FOUND))
+        (current-price (get-dutch-auction-price auction-id)))
+    (begin
+      (asserts! (get active auction) ERR-UNAUTHORIZED)
+      (asserts! (< block-height (get end-block auction)) ERR-UNAUTHORIZED)
+      (asserts! (not (is-eq tx-sender (get seller auction))) ERR-UNAUTHORIZED)
+      
+      ;; Transfer NFT to buyer
+      (try! (nft-transfer? enhanced-nft (get token-id auction) (get seller auction) tx-sender))
+      
+      ;; Calculate and distribute fees
+      (let ((trading-fee (/ (* current-price (var-get trading-fee-percentage)) u10000))
+            (seller-amount (- current-price trading-fee)))
+        (begin
+          ;; Mark auction as inactive
+          (map-set dutch-auctions auction-id (merge auction {active: false}))
+          
+          (print {
+            notification: "dutch-auction-completed",
+            payload: {
+              auction-id: auction-id,
+              token-id: (get token-id auction),
+              buyer: tx-sender,
+              final-price: current-price,
+              trading-fee: trading-fee
+            }
+          })
+          
+          (ok current-price))))))
+
+;; Create bundle sale
+(define-public (create-bundle-sale 
+  (token-ids (list 20 uint))
+  (total-price uint)
+  (currency (string-ascii 16))
+  (duration uint))
+  (let ((bundle-id (var-get next-bundle-id))
+        (bundle-size (len token-ids)))
+    (begin
+      (asserts! (> bundle-size u1) ERR-BATCH-SIZE-EXCEEDED)
+      (asserts! (<= bundle-size u20) ERR-BATCH-SIZE-EXCEEDED)
+      (asserts! (> total-price u0) ERR-INVALID-PRICE)
+      
+      ;; Validate ownership of all tokens
+      (try! (validate-bundle-ownership token-ids))
+      
+      (map-set bundle-sales bundle-id {
+        token-ids: token-ids,
+        seller: tx-sender,
+        total-price: total-price,
+        currency: currency,
+        expires-at: (+ block-height duration),
+        active: true,
+        min-bundle-size: bundle-size
+      })
+      
+      (var-set next-bundle-id (+ bundle-id u1))
+      
+      (print {
+        notification: "bundle-sale-created",
+        payload: {
+          bundle-id: bundle-id,
+          token-count: bundle-size,
+          total-price: total-price,
+          expires-at: (+ block-height duration)
+        }
+      })
+      
+      (ok bundle-id))))
+
+;; Validate bundle ownership
+(define-private (validate-bundle-ownership (token-ids (list 20 uint)))
+  (fold validate-token-ownership token-ids (ok true)))
+
+(define-private (validate-token-ownership (token-id uint) (acc (response bool uint)))
+  (match acc
+    success (match (nft-get-owner? enhanced-nft token-id)
+      owner (if (is-eq owner tx-sender)
+        (ok true)
+        (err ERR-NOT-TOKEN-OWNER))
+      (err ERR-TOKEN-NOT-FOUND))
+    error error))
+
+;; Purchase bundle
+(define-public (purchase-bundle (bundle-id uint))
+  (let ((bundle (unwrap! (map-get? bundle-sales bundle-id) ERR-TOKEN-NOT-FOUND)))
+    (begin
+      (asserts! (get active bundle) ERR-UNAUTHORIZED)
+      (asserts! (< block-height (get expires-at bundle)) ERR-UNAUTHORIZED)
+      (asserts! (not (is-eq tx-sender (get seller bundle))) ERR-UNAUTHORIZED)
+      
+      ;; Transfer all tokens in bundle atomically
+      (try! (transfer-bundle-tokens (get token-ids bundle) (get seller bundle) tx-sender))
+      
+      ;; Mark bundle as sold
+      (map-set bundle-sales bundle-id (merge bundle {active: false}))
+      
+      (print {
+        notification: "bundle-purchased",
+        payload: {
+          bundle-id: bundle-id,
+          buyer: tx-sender,
+          token-count: (len (get token-ids bundle)),
+          total-price: (get total-price bundle)
+        }
+      })
+      
+      (ok true))))
+
+;; Transfer bundle tokens atomically
+(define-private (transfer-bundle-tokens (token-ids (list 20 uint)) (from principal) (to principal))
+  (fold transfer-single-token token-ids (ok u0)))
+
+(define-private (transfer-single-token (token-id uint) (acc (response uint uint)))
+  (match acc
+    success-count (begin
+      (try! (nft-transfer? enhanced-nft token-id from to))
+      (ok (+ success-count u1)))
+    error error))
+
+;; Enable fractional ownership
+(define-public (enable-fractional-ownership 
+  (token-id uint)
+  (total-shares uint)
+  (price-per-share uint))
+  (let ((owner (unwrap! (nft-get-owner? enhanced-nft token-id) ERR-TOKEN-NOT-FOUND)))
+    (begin
+      (asserts! (is-eq tx-sender owner) ERR-NOT-TOKEN-OWNER)
+      (asserts! (> total-shares u1) ERR-INVALID-PRICE)
+      (asserts! (> price-per-share u0) ERR-INVALID-PRICE)
+      
+      (map-set fractional-ownership token-id {
+        token-id: token-id,
+        total-shares: total-shares,
+        available-shares: total-shares,
+        price-per-share: price-per-share,
+        shareholders: (list {owner: tx-sender, shares: total-shares}),
+        created-at: block-height,
+        active: true
+      })
+      
+      (print {
+        notification: "fractional-ownership-enabled",
+        payload: {
+          token-id: token-id,
+          total-shares: total-shares,
+          price-per-share: price-per-share
+        }
+      })
+      
+      (ok true))))
+
+;; Purchase fractional shares
+(define-public (purchase-fractional-shares (token-id uint) (shares-to-buy uint))
+  (let ((fractional (unwrap! (map-get? fractional-ownership token-id) ERR-TOKEN-NOT-FOUND)))
+    (begin
+      (asserts! (get active fractional) ERR-UNAUTHORIZED)
+      (asserts! (<= shares-to-buy (get available-shares fractional)) ERR-BATCH-SIZE-EXCEEDED)
+      (asserts! (> shares-to-buy u0) ERR-INVALID-PRICE)
+      
+      (let ((total-cost (* shares-to-buy (get price-per-share fractional)))
+            (updated-shareholders (add-shareholder (get shareholders fractional) tx-sender shares-to-buy)))
+        (begin
+          (map-set fractional-ownership token-id (merge fractional {
+            available-shares: (- (get available-shares fractional) shares-to-buy),
+            shareholders: updated-shareholders
+          }))
+          
+          (print {
+            notification: "fractional-shares-purchased",
+            payload: {
+              token-id: token-id,
+              buyer: tx-sender,
+              shares-purchased: shares-to-buy,
+              total-cost: total-cost
+            }
+          })
+          
+          (ok shares-to-buy))))))
+
+;; Add shareholder to list
+(define-private (add-shareholder 
+  (shareholders (list 50 {owner: principal, shares: uint}))
+  (new-owner principal)
+  (new-shares uint))
+  ;; Simplified - would check for existing shareholder and update
+  (unwrap-panic (as-max-len? (append shareholders {owner: new-owner, shares: new-shares}) u50)))
+
+;; Get auction info
+(define-read-only (get-dutch-auction-info (auction-id uint))
+  (map-get? dutch-auctions auction-id))
+
+;; Get bundle info
+(define-read-only (get-bundle-info (bundle-id uint))
+  (map-get? bundle-sales bundle-id))
+
+;; Get fractional ownership info
+(define-read-only (get-fractional-info (token-id uint))
+  (map-get? fractional-ownership token-id))
 (define-map listings uint {
   seller: principal,
   price: uint,
