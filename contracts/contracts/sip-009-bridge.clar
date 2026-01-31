@@ -238,6 +238,133 @@
       
       (ok true))))
 
+;; Bridge failure recovery system
+(define-map recovery-requests uint {
+  original-request-id: uint,
+  failure-reason: (string-ascii 64),
+  recovery-method: (string-ascii 32), ;; rollback, retry, manual
+  initiated-by: principal,
+  initiated-at: uint,
+  recovery-status: (string-ascii 16), ;; pending, processing, completed, failed
+  recovery-data: (optional (string-ascii 256))
+})
+
+(define-data-var next-recovery-id uint u1)
+
+;; Initiate bridge failure recovery
+(define-public (initiate-recovery 
+  (request-id uint)
+  (failure-reason (string-ascii 64))
+  (recovery-method (string-ascii 32)))
+  (let ((request (unwrap! (map-get? bridge-requests request-id) ERR-INVALID-REQUEST))
+        (recovery-id (var-get next-recovery-id)))
+    (begin
+      (asserts! (or (is-eq tx-sender (get owner request))
+                    (is-eq tx-sender CONTRACT-OWNER)) ERR-NOT-AUTHORIZED)
+      (asserts! (or (is-eq (get status request) "failed")
+                    (is-eq (get status request) "pending")) ERR-INVALID-REQUEST)
+      
+      (map-set recovery-requests recovery-id {
+        original-request-id: request-id,
+        failure-reason: failure-reason,
+        recovery-method: recovery-method,
+        initiated-by: tx-sender,
+        initiated-at: block-height,
+        recovery-status: "pending",
+        recovery-data: none
+      })
+      
+      (var-set next-recovery-id (+ recovery-id u1))
+      
+      (print {
+        notification: "recovery-initiated",
+        payload: {
+          recovery-id: recovery-id,
+          original-request-id: request-id,
+          failure-reason: failure-reason,
+          recovery-method: recovery-method
+        }
+      })
+      
+      (ok recovery-id))))
+
+;; Execute rollback recovery
+(define-public (execute-rollback-recovery (recovery-id uint))
+  (let ((recovery-info (unwrap! (map-get? recovery-requests recovery-id) ERR-INVALID-REQUEST))
+        (original-request (unwrap! (map-get? bridge-requests (get original-request-id recovery-info)) ERR-INVALID-REQUEST)))
+    (begin
+      (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+      (asserts! (is-eq (get recovery-method recovery-info) "rollback") ERR-INVALID-REQUEST)
+      (asserts! (is-eq (get recovery-status recovery-info) "pending") ERR-INVALID-REQUEST)
+      
+      ;; Update recovery status
+      (map-set recovery-requests recovery-id
+        (merge recovery-info {
+          recovery-status: "processing"
+        }))
+      
+      ;; Unlock the token
+      (map-delete locked-tokens (get token-id original-request))
+      
+      ;; Update original request status
+      (map-set bridge-requests (get original-request-id recovery-info)
+        (merge original-request {status: "rolled-back"}))
+      
+      ;; Complete recovery
+      (map-set recovery-requests recovery-id
+        (merge recovery-info {
+          recovery-status: "completed",
+          recovery-data: (some "Token unlocked and request rolled back")
+        }))
+      
+      (print {
+        notification: "rollback-completed",
+        payload: {
+          recovery-id: recovery-id,
+          token-id: (get token-id original-request),
+          owner: (get owner original-request)
+        }
+      })
+      
+      (ok true))))
+
+;; Retry failed bridge request
+(define-public (retry-bridge-request (recovery-id uint))
+  (let ((recovery-info (unwrap! (map-get? recovery-requests recovery-id) ERR-INVALID-REQUEST))
+        (original-request (unwrap! (map-get? bridge-requests (get original-request-id recovery-info)) ERR-INVALID-REQUEST)))
+    (begin
+      (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+      (asserts! (is-eq (get recovery-method recovery-info) "retry") ERR-INVALID-REQUEST)
+      (asserts! (is-eq (get recovery-status recovery-info) "pending") ERR-INVALID-REQUEST)
+      
+      ;; Reset original request to pending
+      (map-set bridge-requests (get original-request-id recovery-info)
+        (merge original-request {
+          status: "pending",
+          validator-signatures: (list)
+        }))
+      
+      ;; Update recovery status
+      (map-set recovery-requests recovery-id
+        (merge recovery-info {
+          recovery-status: "completed",
+          recovery-data: (some "Request reset for retry")
+        }))
+      
+      (print {
+        notification: "retry-initiated",
+        payload: {
+          recovery-id: recovery-id,
+          request-id: (get original-request-id recovery-info)
+        }
+      })
+      
+      (ok true))))
+
+;; Get recovery request info
+(define-read-only (get-recovery-request (recovery-id uint))
+  (map-get? recovery-requests recovery-id))
+
 ;; Get metadata sync status
 (define-read-only (get-metadata-sync-status (sync-id uint))
   (map-get? metadata-sync sync-id))
