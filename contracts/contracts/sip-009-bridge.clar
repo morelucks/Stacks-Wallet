@@ -27,7 +27,12 @@
   active: bool,
   added-at: uint,
   total-validations: uint,
-  reputation-score: uint
+  reputation-score: uint,
+  successful-validations: uint,
+  failed-validations: uint,
+  last-validation: uint,
+  stake-amount: uint,
+  slashing-count: uint
 })
 
 (define-map chain-configs (string-ascii 32) {
@@ -395,6 +400,71 @@
     })
     
     (ok true)))
+
+;; Validator staking and slashing system
+(define-constant MIN-VALIDATOR-STAKE u1000000000) ;; 1000 STX minimum stake
+
+;; Stake tokens to become validator
+(define-public (stake-as-validator (stake-amount uint))
+  (begin
+    (asserts! (>= stake-amount MIN-VALIDATOR-STAKE) ERR-INSUFFICIENT-BALANCE)
+    (asserts! (>= (stx-get-balance tx-sender) stake-amount) ERR-INSUFFICIENT-BALANCE)
+    
+    ;; Transfer stake to contract
+    (try! (stx-transfer? stake-amount tx-sender (as-contract tx-sender)))
+    
+    ;; Add or update validator
+    (map-set bridge-validators tx-sender {
+      active: true,
+      added-at: block-height,
+      total-validations: u0,
+      reputation-score: u100,
+      successful-validations: u0,
+      failed-validations: u0,
+      last-validation: u0,
+      stake-amount: stake-amount,
+      slashing-count: u0
+    })
+    
+    (print {
+      notification: "validator-staked",
+      payload: {
+        validator: tx-sender,
+        stake-amount: stake-amount
+      }
+    })
+    
+    (ok true)))
+
+;; Slash validator for malicious behavior
+(define-public (slash-validator (validator principal) (slash-percentage uint))
+  (let ((validator-info (unwrap! (map-get? bridge-validators validator) ERR-NOT-AUTHORIZED)))
+    (begin
+      (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+      (asserts! (<= slash-percentage u100) ERR-INVALID-REQUEST)
+      
+      (let ((slash-amount (/ (* (get stake-amount validator-info) slash-percentage) u100))
+            (remaining-stake (- (get stake-amount validator-info) slash-amount)))
+        
+        ;; Update validator info
+        (map-set bridge-validators validator
+          (merge validator-info {
+            stake-amount: remaining-stake,
+            slashing-count: (+ (get slashing-count validator-info) u1),
+            reputation-score: (max (- (get reputation-score validator-info) u10) u0),
+            active: (> remaining-stake (/ MIN-VALIDATOR-STAKE u2)) ;; Deactivate if stake too low
+          }))
+        
+        (print {
+          notification: "validator-slashed",
+          payload: {
+            validator: validator,
+            slash-amount: slash-amount,
+            remaining-stake: remaining-stake
+          }
+        })
+        
+        (ok slash-amount)))))
 
 ;; Validator functions
 (define-public (add-validator (validator principal))
