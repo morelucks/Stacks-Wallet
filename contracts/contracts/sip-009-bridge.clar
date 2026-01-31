@@ -503,6 +503,7 @@
       (asserts! (get active validator-info) ERR-NOT-AUTHORIZED)
       (asserts! (is-eq (get status request) "pending") ERR-INVALID-REQUEST)
       (asserts! (< (- block-height (get created-at request)) (var-get bridge-timeout-blocks)) ERR-REQUEST-EXPIRED)
+      (asserts! (>= (get reputation-score validator-info) u50) ERR-NOT-AUTHORIZED) ;; Min reputation check
       
       ;; Verify signature format
       (asserts! (is-eq (len signature) u65) ERR-INVALID-SIGNATURE)
@@ -514,11 +515,13 @@
             validator-signatures: (unwrap-panic (as-max-len? (append current-signatures signature) u10))
           }))
         
-        ;; Update validator stats
+        ;; Update validator stats with enhanced tracking
         (map-set bridge-validators tx-sender
           (merge validator-info {
             total-validations: (+ (get total-validations validator-info) u1),
-            reputation-score: (+ (get reputation-score validator-info) u1)
+            successful-validations: (+ (get successful-validations validator-info) u1),
+            last-validation: block-height,
+            reputation-score: (min (+ (get reputation-score validator-info) u1) u200)
           }))
         
         ;; Check if we have enough signatures
