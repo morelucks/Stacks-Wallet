@@ -401,6 +401,242 @@
     
     (ok true)))
 
+;; Bridge API integration and webhook system
+(define-map webhook-endpoints uint {
+  url: (string-ascii 256),
+  event-types: (list 10 (string-ascii 32)),
+  active: bool,
+  secret-hash: (buff 32),
+  retry-count: uint,
+  last-triggered: uint,
+  success-count: uint,
+  failure-count: uint
+})
+
+(define-map api-keys principal {
+  key-hash: (buff 32),
+  permissions: (list 10 (string-ascii 32)),
+  rate-limit: uint,
+  created-at: uint,
+  expires-at: uint,
+  active: bool
+})
+
+(define-map webhook-deliveries uint {
+  webhook-id: uint,
+  event-type: (string-ascii 32),
+  payload-hash: (buff 32),
+  delivery-status: (string-ascii 16), ;; "pending", "delivered", "failed", "retrying"
+  attempts: uint,
+  last-attempt: uint,
+  response-code: (optional uint)
+})
+
+(define-data-var next-webhook-id uint u1)
+(define-data-var next-delivery-id uint u1)
+(define-data-var webhook-enabled bool true)
+
+;; Register webhook endpoint
+(define-public (register-webhook 
+  (url (string-ascii 256))
+  (event-types (list 10 (string-ascii 32)))
+  (secret (string-ascii 64)))
+  (let ((webhook-id (var-get next-webhook-id))
+        (secret-hash (keccak256 secret)))
+    (begin
+      (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED) ;; Could allow users to register their own
+      (asserts! (> (len event-types) u0) ERR-INVALID-REQUEST)
+      
+      (map-set webhook-endpoints webhook-id {
+        url: url,
+        event-types: event-types,
+        active: true,
+        secret-hash: secret-hash,
+        retry-count: u3,
+        last-triggered: u0,
+        success-count: u0,
+        failure-count: u0
+      })
+      
+      (var-set next-webhook-id (+ webhook-id u1))
+      
+      (print {
+        notification: "webhook-registered",
+        payload: {
+          webhook-id: webhook-id,
+          url: url,
+          event-types: event-types
+        }
+      })
+      
+      (ok webhook-id))))
+
+;; Create API key
+(define-public (create-api-key 
+  (user principal)
+  (permissions (list 10 (string-ascii 32)))
+  (rate-limit uint)
+  (duration-blocks uint))
+  (let ((key-data (generate-api-key user))
+        (key-hash (keccak256 key-data)))
+    (begin
+      (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+      
+      (map-set api-keys user {
+        key-hash: key-hash,
+        permissions: permissions,
+        rate-limit: rate-limit,
+        created-at: block-height,
+        expires-at: (+ block-height duration-blocks),
+        active: true
+      })
+      
+      (print {
+        notification: "api-key-created",
+        payload: {
+          user: user,
+          permissions: permissions,
+          rate-limit: rate-limit,
+          expires-at: (+ block-height duration-blocks)
+        }
+      })
+      
+      (ok key-hash))))
+
+;; Generate API key data
+(define-private (generate-api-key (user principal))
+  (concat (unwrap-panic (principal-destruct? user)) (uint-to-ascii block-height)))
+
+;; Trigger webhook for bridge events
+(define-private (trigger-webhook (event-type (string-ascii 32)) (payload-data (string-ascii 512)))
+  (let ((delivery-id (var-get next-delivery-id)))
+    (begin
+      (asserts! (var-get webhook-enabled) (ok true))
+      
+      ;; Find matching webhooks and queue deliveries
+      (try! (queue-webhook-deliveries event-type payload-data))
+      
+      (var-set next-delivery-id (+ delivery-id u1))
+      (ok true))))
+
+;; Queue webhook deliveries for matching endpoints
+(define-private (queue-webhook-deliveries (event-type (string-ascii 32)) (payload-data (string-ascii 512)))
+  (let ((payload-hash (keccak256 payload-data)))
+    ;; Simplified - would iterate through all webhooks and queue matching ones
+    (ok true)))
+
+;; Process webhook delivery
+(define-public (process-webhook-delivery (delivery-id uint))
+  (let ((delivery (unwrap! (map-get? webhook-deliveries delivery-id) ERR-INVALID-REQUEST)))
+    (begin
+      (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+      (asserts! (not (is-eq (get delivery-status delivery) "delivered")) ERR-INVALID-REQUEST)
+      
+      ;; Simulate webhook delivery (would make HTTP request in real implementation)
+      (let ((success (simulate-webhook-call (get webhook-id delivery))))
+        (map-set webhook-deliveries delivery-id
+          (merge delivery {
+            delivery-status: (if success "delivered" "failed"),
+            attempts: (+ (get attempts delivery) u1),
+            last-attempt: block-height,
+            response-code: (some (if success u200 u500))
+          }))
+        
+        ;; Update webhook endpoint stats
+        (try! (update-webhook-stats (get webhook-id delivery) success))
+        
+        (print {
+          notification: "webhook-delivery-processed",
+          payload: {
+            delivery-id: delivery-id,
+            success: success,
+            attempts: (+ (get attempts delivery) u1)
+          }
+        })
+        
+        (ok success)))))
+
+;; Simulate webhook call (placeholder)
+(define-private (simulate-webhook-call (webhook-id uint))
+  true) ;; Simplified - would make actual HTTP request
+
+;; Update webhook statistics
+(define-private (update-webhook-stats (webhook-id uint) (success bool))
+  (let ((webhook (unwrap! (map-get? webhook-endpoints webhook-id) ERR-INVALID-REQUEST)))
+    (map-set webhook-endpoints webhook-id
+      (merge webhook {
+        last-triggered: block-height,
+        success-count: (if success (+ (get success-count webhook) u1) (get success-count webhook)),
+        failure-count: (if success (get failure-count webhook) (+ (get failure-count webhook) u1))
+      }))
+    (ok true)))
+
+;; Validate API key and permissions
+(define-private (validate-api-access (user principal) (required-permission (string-ascii 32)))
+  (match (map-get? api-keys user)
+    api-key (begin
+      (asserts! (get active api-key) ERR-NOT-AUTHORIZED)
+      (asserts! (< block-height (get expires-at api-key)) ERR-REQUEST-EXPIRED)
+      (asserts! (contains required-permission (get permissions api-key)) ERR-NOT-AUTHORIZED)
+      (ok true))
+    (err ERR-NOT-AUTHORIZED)))
+
+;; Get webhook endpoint details
+(define-read-only (get-webhook-endpoint (webhook-id uint))
+  (map-get? webhook-endpoints webhook-id))
+
+;; Get API key details
+(define-read-only (get-api-key-info (user principal))
+  (match (map-get? api-keys user)
+    api-key (some {
+      permissions: (get permissions api-key),
+      rate-limit: (get rate-limit api-key),
+      created-at: (get created-at api-key),
+      expires-at: (get expires-at api-key),
+      active: (get active api-key)
+    })
+    none))
+
+;; Get webhook delivery status
+(define-read-only (get-webhook-delivery (delivery-id uint))
+  (map-get? webhook-deliveries delivery-id))
+
+;; Disable webhook endpoint
+(define-public (disable-webhook (webhook-id uint))
+  (let ((webhook (unwrap! (map-get? webhook-endpoints webhook-id) ERR-INVALID-REQUEST)))
+    (begin
+      (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+      
+      (map-set webhook-endpoints webhook-id
+        (merge webhook {active: false}))
+      
+      (print {
+        notification: "webhook-disabled",
+        payload: {
+          webhook-id: webhook-id
+        }
+      })
+      
+      (ok true))))
+
+;; Revoke API key
+(define-public (revoke-api-key (user principal))
+  (let ((api-key (unwrap! (map-get? api-keys user) ERR-INVALID-REQUEST)))
+    (begin
+      (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+      
+      (map-set api-keys user
+        (merge api-key {active: false}))
+      
+      (print {
+        notification: "api-key-revoked",
+        payload: {
+          user: user
+        }
+      })
+      
+      (ok true))))
+
 ;; Bridge compliance and regulatory features
 (define-map compliance-rules (string-ascii 32) {
   rule-type: (string-ascii 32), ;; "kyc-required", "amount-limit", "geo-restriction", "time-restriction"
