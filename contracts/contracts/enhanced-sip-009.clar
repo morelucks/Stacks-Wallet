@@ -3397,3 +3397,69 @@
     contract-paused: (var-get contract-paused),
     governance-enabled: (var-get governance-enabled)
   })
+
+;; Performance Optimization Functions
+(define-map performance-metrics (string-ascii 32) {
+  execution-count: uint,
+  total-gas-used: uint,
+  average-gas: uint,
+  last-execution: uint,
+  optimization-level: uint
+})
+
+(define-private (track-performance (function-name (string-ascii 32)) (gas-used uint))
+  (let ((current-metrics (default-to {
+    execution-count: u0,
+    total-gas-used: u0,
+    average-gas: u0,
+    last-execution: u0,
+    optimization-level: u1
+  } (map-get? performance-metrics function-name))))
+    (let ((new-count (+ (get execution-count current-metrics) u1))
+          (new-total-gas (+ (get total-gas-used current-metrics) gas-used)))
+      (begin
+        (map-set performance-metrics function-name {
+          execution-count: new-count,
+          total-gas-used: new-total-gas,
+          average-gas: (/ new-total-gas new-count),
+          last-execution: block-height,
+          optimization-level: (calculate-optimization-level new-count new-total-gas)
+        })
+        (ok true)))))
+
+(define-private (calculate-optimization-level (count uint) (total-gas uint))
+  (let ((avg-gas (/ total-gas count)))
+    (if (< avg-gas u1000) u5
+      (if (< avg-gas u5000) u4
+        (if (< avg-gas u10000) u3
+          (if (< avg-gas u20000) u2 u1))))))
+
+;; Get performance metrics
+(define-read-only (get-performance-metrics (function-name (string-ascii 32)))
+  (map-get? performance-metrics function-name))
+
+;; System health check
+(define-read-only (system-health-check)
+  {
+    contract-status: {
+      paused: (var-get contract-paused),
+      emergency-pause: (var-get emergency-pause-enabled),
+      total-supply: (var-get total-supply)
+    },
+    cache-health: {
+      enabled: (var-get cache-enabled),
+      hit-rate: (let ((hits (var-get cache-hit-count))
+                      (misses (var-get cache-miss-count)))
+                  (if (> (+ hits misses) u0)
+                    (/ (* hits u100) (+ hits misses))
+                    u0))
+    },
+    security-health: {
+      monitoring-enabled: (var-get security-monitoring-enabled),
+      total-events: (- (var-get next-security-event-id) u1)
+    },
+    analytics-health: {
+      enabled: (var-get analytics-enabled),
+      current-period: (var-get current-metrics-period)
+    }
+  })
