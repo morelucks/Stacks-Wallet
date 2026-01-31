@@ -523,7 +523,206 @@
   (description (string-ascii 256))
   (image (string-ascii 256)))
   {token-id: token-id, name: name, description: description, image: image})
-;; Marketplace and trading features
+;; Dynamic Metadata Evolution System
+(define-map evolution-rules uint {
+  rule-type: (string-ascii 32),
+  condition: (string-ascii 128),
+  transformation: (string-ascii 256),
+  trigger-block: uint,
+  active: bool,
+  created-by: principal
+})
+
+(define-map metadata-versions uint (list 10 {
+  version: uint,
+  metadata: {name: (string-ascii 64), description: (string-ascii 256), image: (string-ascii 256), attributes: (list 10 {trait_type: (string-ascii 32), value: (string-ascii 64)}), creator: principal, created-at: uint, rarity: (string-ascii 16)},
+  evolved-at: uint,
+  rule-applied: uint
+}))
+
+(define-map conditional-triggers uint {
+  token-id: uint,
+  condition-type: (string-ascii 32),
+  threshold-value: uint,
+  current-value: uint,
+  triggered: bool
+})
+
+(define-data-var next-rule-id uint u1)
+(define-data-var evolution-enabled bool true)
+
+;; Create evolution rule
+(define-public (create-evolution-rule 
+  (rule-type (string-ascii 32))
+  (condition (string-ascii 128))
+  (transformation (string-ascii 256))
+  (trigger-block uint))
+  (let ((rule-id (var-get next-rule-id)))
+    (begin
+      (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-OWNER-ONLY)
+      (asserts! (var-get evolution-enabled) ERR-CONTRACT-PAUSED)
+      (asserts! (> trigger-block block-height) ERR-INVALID-PRICE)
+      
+      (map-set evolution-rules rule-id {
+        rule-type: rule-type,
+        condition: condition,
+        transformation: transformation,
+        trigger-block: trigger-block,
+        active: true,
+        created-by: tx-sender
+      })
+      
+      (var-set next-rule-id (+ rule-id u1))
+      
+      (print {
+        notification: "evolution-rule-created",
+        payload: {
+          rule-id: rule-id,
+          rule-type: rule-type,
+          trigger-block: trigger-block
+        }
+      })
+      
+      (ok rule-id))))
+
+;; Apply evolution rule to token
+(define-public (evolve-token-metadata (token-id uint) (rule-id uint))
+  (let ((rule (unwrap! (map-get? evolution-rules rule-id) ERR-TOKEN-NOT-FOUND))
+        (current-metadata (unwrap! (map-get? token-metadata token-id) ERR-TOKEN-NOT-FOUND)))
+    (begin
+      (asserts! (var-get evolution-enabled) ERR-CONTRACT-PAUSED)
+      (asserts! (get active rule) ERR-UNAUTHORIZED)
+      (asserts! (>= block-height (get trigger-block rule)) ERR-UNAUTHORIZED)
+      
+      ;; Apply transformation based on rule type
+      (let ((evolved-metadata (apply-transformation current-metadata rule)))
+        (begin
+          ;; Store version history
+          (try! (store-metadata-version token-id current-metadata rule-id))
+          
+          ;; Update current metadata
+          (map-set token-metadata token-id evolved-metadata)
+          
+          (print {
+            notification: "metadata-evolved",
+            payload: {
+              token-id: token-id,
+              rule-id: rule-id,
+              rule-type: (get rule-type rule),
+              evolved-at: block-height
+            }
+          })
+          
+          (ok true))))))
+
+;; Apply transformation logic
+(define-private (apply-transformation 
+  (metadata {name: (string-ascii 64), description: (string-ascii 256), image: (string-ascii 256), attributes: (list 10 {trait_type: (string-ascii 32), value: (string-ascii 64)}), creator: principal, created-at: uint, rarity: (string-ascii 16)})
+  (rule {rule-type: (string-ascii 32), condition: (string-ascii 128), transformation: (string-ascii 256), trigger-block: uint, active: bool, created-by: principal}))
+  (if (is-eq (get rule-type rule) "rarity-upgrade")
+    (merge metadata {rarity: "legendary"})
+    (if (is-eq (get rule-type rule) "attribute-add")
+      (merge metadata {
+        attributes: (unwrap-panic (as-max-len? 
+          (append (get attributes metadata) {trait_type: "Evolved", value: "True"}) u10))
+      })
+      (if (is-eq (get rule-type rule) "name-prefix")
+        (merge metadata {name: (concat "Evolved " (get name metadata))})
+        metadata))))
+
+;; Store metadata version history
+(define-private (store-metadata-version 
+  (token-id uint) 
+  (metadata {name: (string-ascii 64), description: (string-ascii 256), image: (string-ascii 256), attributes: (list 10 {trait_type: (string-ascii 32), value: (string-ascii 64)}), creator: principal, created-at: uint, rarity: (string-ascii 16)})
+  (rule-id uint))
+  (let ((current-versions (default-to (list) (map-get? metadata-versions token-id)))
+        (new-version {
+          version: (+ (len current-versions) u1),
+          metadata: metadata,
+          evolved-at: block-height,
+          rule-applied: rule-id
+        }))
+    (begin
+      (map-set metadata-versions token-id 
+        (unwrap-panic (as-max-len? (append current-versions new-version) u10)))
+      (ok true))))
+
+;; Conditional evolution triggers
+(define-public (create-conditional-trigger 
+  (token-id uint)
+  (condition-type (string-ascii 32))
+  (threshold-value uint))
+  (let ((metadata (unwrap! (map-get? token-metadata token-id) ERR-TOKEN-NOT-FOUND)))
+    (begin
+      (asserts! (is-eq tx-sender (get creator metadata)) ERR-UNAUTHORIZED)
+      
+      (map-set conditional-triggers token-id {
+        token-id: token-id,
+        condition-type: condition-type,
+        threshold-value: threshold-value,
+        current-value: u0,
+        triggered: false
+      })
+      
+      (print {
+        notification: "conditional-trigger-created",
+        payload: {
+          token-id: token-id,
+          condition-type: condition-type,
+          threshold-value: threshold-value
+        }
+      })
+      
+      (ok true))))
+
+;; Update conditional trigger value
+(define-public (update-trigger-value (token-id uint) (new-value uint))
+  (let ((trigger (unwrap! (map-get? conditional-triggers token-id) ERR-TOKEN-NOT-FOUND))
+        (metadata (unwrap! (map-get? token-metadata token-id) ERR-TOKEN-NOT-FOUND)))
+    (begin
+      (asserts! (is-eq tx-sender (get creator metadata)) ERR-UNAUTHORIZED)
+      (asserts! (not (get triggered trigger)) ERR-UNAUTHORIZED)
+      
+      (let ((updated-trigger (merge trigger {current-value: new-value})))
+        (begin
+          (map-set conditional-triggers token-id updated-trigger)
+          
+          ;; Check if threshold is reached
+          (if (>= new-value (get threshold-value trigger))
+            (begin
+              (map-set conditional-triggers token-id (merge updated-trigger {triggered: true}))
+              (print {
+                notification: "conditional-trigger-activated",
+                payload: {
+                  token-id: token-id,
+                  condition-type: (get condition-type trigger),
+                  final-value: new-value
+                }
+              }))
+            (ok false))
+          
+          (ok true))))))
+
+;; Get metadata evolution history
+(define-read-only (get-metadata-history (token-id uint))
+  (map-get? metadata-versions token-id))
+
+;; Get evolution rule
+(define-read-only (get-evolution-rule (rule-id uint))
+  (map-get? evolution-rules rule-id))
+
+;; Get conditional trigger
+(define-read-only (get-conditional-trigger (token-id uint))
+  (map-get? conditional-triggers token-id))
+
+;; Check if token can evolve
+(define-read-only (can-token-evolve (token-id uint) (rule-id uint))
+  (match (map-get? evolution-rules rule-id)
+    rule (and 
+      (get active rule)
+      (>= block-height (get trigger-block rule))
+      (is-some (map-get? token-metadata token-id)))
+    false))
 (define-map listings uint {
   seller: principal,
   price: uint,
