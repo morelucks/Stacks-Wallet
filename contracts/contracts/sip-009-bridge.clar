@@ -115,17 +115,22 @@
       ;; Lock the token
       (try! (lock-token token-id request-id))
       
-      ;; Create bridge request
-      (map-set bridge-requests request-id {
-        token-id: token-id,
-        owner: tx-sender,
-        target-chain: target-chain,
-        target-address: target-address,
-        status: "pending",
-        created-at: block-height,
-        confirmed-at: none,
-        validator-signatures: (list)
-      })
+      ;; Generate cryptographic proof
+      (let ((proof-info (generate-transfer-proof token-id tx-sender target-chain)))
+        ;; Create bridge request
+        (map-set bridge-requests request-id {
+          token-id: token-id,
+          owner: tx-sender,
+          target-chain: target-chain,
+          target-address: target-address,
+          status: "pending",
+          created-at: block-height,
+          confirmed-at: none,
+          validator-signatures: (list),
+          proof-hash: (some (get proof-hash proof-info)),
+          merkle-root: (some (get merkle-root proof-info)),
+          proof-data: (some (get proof-data proof-info))
+        }))
       
       (var-set next-bridge-request-id (+ request-id u1))
       
