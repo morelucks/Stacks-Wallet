@@ -143,6 +143,37 @@
       
       (ok request-id))))
 
+;; Generate cryptographic proof for cross-chain transfer
+(define-private (generate-transfer-proof (token-id uint) (owner principal) (target-chain (string-ascii 32)))
+  (let ((proof-data (concat (concat (uint-to-ascii token-id) "|") 
+                           (concat (principal-to-string owner) "|")))
+        (proof-hash (keccak256 (concat proof-data target-chain))))
+    {
+      proof-hash: proof-hash,
+      proof-data: proof-data,
+      merkle-root: (keccak256 (concat proof-hash (buff-to-hex block-height)))
+    }))
+
+;; Verify cross-chain proof
+(define-private (verify-cross-chain-proof 
+  (proof-hash (buff 32))
+  (expected-data (string-ascii 256))
+  (merkle-root (buff 32)))
+  (let ((computed-hash (keccak256 expected-data)))
+    (and (is-eq proof-hash computed-hash)
+         (is-eq merkle-root (keccak256 (concat proof-hash (buff-to-hex block-height)))))))
+
+;; Helper functions for proof generation
+(define-private (uint-to-ascii (value uint))
+  (if (is-eq value u0) "0"
+    (unwrap-panic (as-max-len? (int-to-ascii (to-int value)) u32))))
+
+(define-private (principal-to-string (p principal))
+  (unwrap-panic (as-max-len? (unwrap-panic (principal-destruct? p)) u64)))
+
+(define-private (buff-to-hex (value uint))
+  (unwrap-panic (as-max-len? (concat "0x" (uint-to-ascii value)) u32)))
+
 ;; Lock token for bridging
 (define-private (lock-token (token-id uint) (request-id uint))
   (begin
