@@ -401,6 +401,85 @@
     
     (ok true)))
 
+;; Multi-chain routing system
+(define-map bridge-routes {source-chain: (string-ascii 32), target-chain: (string-ascii 32)} {
+  active: bool,
+  route-fee: uint,
+  estimated-time: uint,
+  success-rate: uint,
+  last-updated: uint,
+  intermediate-chains: (list 3 (string-ascii 32))
+})
+
+;; Initialize bridge routes
+(map-set bridge-routes {source-chain: "stacks", target-chain: "ethereum"} {
+  active: true,
+  route-fee: u1000000,
+  estimated-time: u12,
+  success-rate: u95,
+  last-updated: block-height,
+  intermediate-chains: (list)
+})
+
+(map-set bridge-routes {source-chain: "stacks", target-chain: "polygon"} {
+  active: true,
+  route-fee: u500000,
+  estimated-time: u8,
+  success-rate: u98,
+  last-updated: block-height,
+  intermediate-chains: (list)
+})
+
+(map-set bridge-routes {source-chain: "ethereum", target-chain: "polygon"} {
+  active: true,
+  route-fee: u750000,
+  estimated-time: u6,
+  success-rate: u97,
+  last-updated: block-height,
+  intermediate-chains: (list)
+})
+
+;; Get optimal bridge route
+(define-read-only (get-optimal-route 
+  (source-chain (string-ascii 32))
+  (target-chain (string-ascii 32))
+  (priority (string-ascii 16))) ;; "speed", "cost", "reliability"
+  (let ((direct-route (map-get? bridge-routes {source-chain: source-chain, target-chain: target-chain})))
+    (match direct-route
+      route (if (get active route)
+              (some {
+                route-type: "direct",
+                total-fee: (get route-fee route),
+                estimated-time: (get estimated-time route),
+                success-rate: (get success-rate route),
+                intermediate-chains: (get intermediate-chains route)
+              })
+              none)
+      none))) ;; Could implement multi-hop routing here
+
+;; Update bridge route performance
+(define-public (update-route-performance 
+  (source-chain (string-ascii 32))
+  (target-chain (string-ascii 32))
+  (completion-time uint)
+  (success bool))
+  (let ((route-key {source-chain: source-chain, target-chain: target-chain})
+        (current-route (unwrap! (map-get? bridge-routes route-key) ERR-INVALID-REQUEST)))
+    (begin
+      (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+      
+      (let ((new-success-rate (if success
+                                (min (+ (get success-rate current-route) u1) u100)
+                                (max (- (get success-rate current-route) u2) u0))))
+        (map-set bridge-routes route-key
+          (merge current-route {
+            estimated-time: (/ (+ (get estimated-time current-route) completion-time) u2),
+            success-rate: new-success-rate,
+            last-updated: block-height
+          })))
+      
+      (ok true))))
+
 ;; Validator staking and slashing system
 (define-constant MIN-VALIDATOR-STAKE u1000000000) ;; 1000 STX minimum stake
 
