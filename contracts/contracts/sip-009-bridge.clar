@@ -401,6 +401,219 @@
     
     (ok true)))
 
+;; Bridge compliance and regulatory features
+(define-map compliance-rules (string-ascii 32) {
+  rule-type: (string-ascii 32), ;; "kyc-required", "amount-limit", "geo-restriction", "time-restriction"
+  active: bool,
+  parameters: (string-ascii 256),
+  created-at: uint,
+  updated-at: uint
+})
+
+(define-map user-compliance principal {
+  kyc-status: (string-ascii 16), ;; "none", "pending", "verified", "rejected"
+  kyc-level: uint, ;; 1-3 (basic, intermediate, advanced)
+  verification-date: (optional uint),
+  compliance-score: uint,
+  restricted-chains: (list 5 (string-ascii 32)),
+  daily-limit: uint,
+  monthly-limit: uint
+})
+
+(define-map compliance-violations uint {
+  user: principal,
+  violation-type: (string-ascii 32),
+  severity: uint,
+  detected-at: uint,
+  resolved: bool,
+  penalty-applied: (optional uint)
+})
+
+(define-data-var next-violation-id uint u1)
+(define-data-var compliance-enabled bool true)
+(define-data-var default-daily-limit uint u10000000000) ;; 10k STX default
+(define-data-var default-monthly-limit uint u100000000000) ;; 100k STX default
+
+;; Set compliance rule
+(define-public (set-compliance-rule 
+  (rule-name (string-ascii 32))
+  (rule-type (string-ascii 32))
+  (active bool)
+  (parameters (string-ascii 256)))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+    
+    (map-set compliance-rules rule-name {
+      rule-type: rule-type,
+      active: active,
+      parameters: parameters,
+      created-at: block-height,
+      updated-at: block-height
+    })
+    
+    (print {
+      notification: "compliance-rule-set",
+      payload: {
+        rule-name: rule-name,
+        rule-type: rule-type,
+        active: active
+      }
+    })
+    
+    (ok true)))
+
+;; Update user compliance status
+(define-public (update-user-compliance 
+  (user principal)
+  (kyc-status (string-ascii 16))
+  (kyc-level uint)
+  (daily-limit uint)
+  (monthly-limit uint))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+    (asserts! (<= kyc-level u3) ERR-INVALID-REQUEST)
+    
+    (map-set user-compliance user {
+      kyc-status: kyc-status,
+      kyc-level: kyc-level,
+      verification-date: (if (is-eq kyc-status "verified") (some block-height) none),
+      compliance-score: (calculate-compliance-score kyc-status kyc-level),
+      restricted-chains: (list),
+      daily-limit: daily-limit,
+      monthly-limit: monthly-limit
+    })
+    
+    (print {
+      notification: "user-compliance-updated",
+      payload: {
+        user: user,
+        kyc-status: kyc-status,
+        kyc-level: kyc-level
+      }
+    })
+    
+    (ok true)))
+
+;; Calculate compliance score
+(define-private (calculate-compliance-score (kyc-status (string-ascii 16)) (kyc-level uint))
+  (let ((status-score (if (is-eq kyc-status "verified") u50
+                        (if (is-eq kyc-status "pending") u25 u0)))
+        (level-score (* kyc-level u25)))
+    (+ status-score level-score)))
+
+;; Check compliance before bridge operation
+(define-private (check-compliance (user principal) (amount uint) (target-chain (string-ascii 32)))
+  (let ((user-compliance-info (map-get? user-compliance user))
+        (kyc-rule (map-get? compliance-rules "kyc-required"))
+        (amount-rule (map-get? compliance-rules "amount-limit")))
+    (begin
+      ;; Check if compliance is enabled
+      (asserts! (var-get compliance-enabled) (ok true))
+      
+      ;; Check KYC requirements
+      (match kyc-rule
+        rule (if (get active rule)
+          (match user-compliance-info
+            compliance (asserts! (is-eq (get kyc-status compliance) "verified") ERR-NOT-AUTHORIZED)
+            (err ERR-NOT-AUTHORIZED))
+          (ok true))
+        (ok true))
+      
+      ;; Check amount limits
+      (match user-compliance-info
+        compliance (begin
+          (asserts! (<= amount (get daily-limit compliance)) ERR-INVALID-REQUEST)
+          (asserts! (<= amount (get monthly-limit compliance)) ERR-INVALID-REQUEST)
+          (ok true))
+        ;; Use default limits for non-KYC users
+        (begin
+          (asserts! (<= amount (var-get default-daily-limit)) ERR-INVALID-REQUEST)
+          (ok true)))
+      
+      (ok true))))
+
+;; Report compliance violation
+(define-public (report-compliance-violation 
+  (user principal)
+  (violation-type (string-ascii 32))
+  (severity uint))
+  (let ((violation-id (var-get next-violation-id)))
+    (begin
+      (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+      (asserts! (and (>= severity u1) (<= severity u5)) ERR-INVALID-REQUEST)
+      
+      (map-set compliance-violations violation-id {
+        user: user,
+        violation-type: violation-type,
+        severity: severity,
+        detected-at: block-height,
+        resolved: false,
+        penalty-applied: none
+      })
+      
+      (var-set next-violation-id (+ violation-id u1))
+      
+      ;; Apply automatic penalties for severe violations
+      (if (>= severity u4)
+        (try! (apply-compliance-penalty user violation-type severity))
+        (ok true))
+      
+      (print {
+        notification: "compliance-violation-reported",
+        payload: {
+          violation-id: violation-id,
+          user: user,
+          violation-type: violation-type,
+          severity: severity
+        }
+      })
+      
+      (ok violation-id))))
+
+;; Apply compliance penalty
+(define-private (apply-compliance-penalty 
+  (user principal)
+  (violation-type (string-ascii 32))
+  (severity uint))
+  (let ((current-compliance (map-get? user-compliance user)))
+    (match current-compliance
+      compliance (begin
+        ;; Reduce compliance score
+        (let ((penalty-amount (* severity u10))
+              (new-score (if (> (get compliance-score compliance) penalty-amount)
+                          (- (get compliance-score compliance) penalty-amount)
+                          u0)))
+          (map-set user-compliance user
+            (merge compliance {
+              compliance-score: new-score,
+              daily-limit: (if (< new-score u50) 
+                            (/ (get daily-limit compliance) u2) ;; Halve limits for low scores
+                            (get daily-limit compliance))
+            })))
+        (ok true))
+      (ok true))))
+
+;; Get user compliance status
+(define-read-only (get-user-compliance-status (user principal))
+  (map-get? user-compliance user))
+
+;; Get compliance rule
+(define-read-only (get-compliance-rule (rule-name (string-ascii 32)))
+  (map-get? compliance-rules rule-name))
+
+;; Get compliance violation
+(define-read-only (get-compliance-violation (violation-id uint))
+  (map-get? compliance-violations violation-id))
+
+;; Generate compliance report
+(define-read-only (get-compliance-summary)
+  {
+    compliance-enabled: (var-get compliance-enabled),
+    total-violations: (- (var-get next-violation-id) u1),
+    default-daily-limit: (var-get default-daily-limit),
+    default-monthly-limit: (var-get default-monthly-limit)
+  })
+
 ;; Bridge performance optimization and caching
 (define-map performance-cache (string-ascii 64) {
   cached-data: (string-ascii 512),
