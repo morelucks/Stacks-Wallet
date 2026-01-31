@@ -136,31 +136,142 @@
     })
     (ok true)))
 
-;; Cache management functions
-(define-private (get-cache-key (operation (string-ascii 32)) (params (buff 64)))
-  (sha256 (concat (unwrap-panic (to-consensus-buff? operation)) params)))
+;; Advanced caching system for frequently accessed data
+(define-data-var cache-enabled bool true)
+(define-data-var cache-hit-count uint u0)
+(define-data-var cache-miss-count uint u0)
 
-(define-private (cache-data (cache-key (buff 32)) (data (buff 256)))
-  (map-set metadata-cache cache-key {
-    cached-data: data,
-    access-count: u1,
-    last-accessed: block-height,
-    expiry-block: (+ block-height u1000)
+;; Enhanced cache management with LRU eviction
+(define-map cache-lru-order uint (buff 32))
+(define-data-var cache-lru-counter uint u0)
+
+;; Cached frequently accessed functions
+(define-read-only (get-cached-token-metadata (token-id uint))
+  (let ((cache-key (get-cache-key "metadata" (unwrap-panic (to-consensus-buff? token-id)))))
+    (match (get-cached-data cache-key)
+      cached-result (begin
+        (var-set cache-hit-count (+ (var-get cache-hit-count) u1))
+        (some (unwrap-panic (from-consensus-buff? {name: (string-ascii 64), description: (string-ascii 256), image: (string-ascii 256), attributes: (list 10 {trait_type: (string-ascii 32), value: (string-ascii 64)}), creator: principal, created-at: uint, rarity: (string-ascii 16)} cached-result))))
+      (let ((metadata (map-get? token-metadata token-id)))
+        (begin
+          (var-set cache-miss-count (+ (var-get cache-miss-count) u1))
+          (match metadata
+            meta-data (begin
+              (try! (cache-data cache-key (unwrap-panic (to-consensus-buff? meta-data))))
+              (some meta-data))
+            none))))))
+
+(define-read-only (get-cached-owner (token-id uint))
+  (let ((cache-key (get-cache-key "owner" (unwrap-panic (to-consensus-buff? token-id)))))
+    (match (get-cached-data cache-key)
+      cached-result (begin
+        (var-set cache-hit-count (+ (var-get cache-hit-count) u1))
+        (ok (unwrap-panic (from-consensus-buff? (optional principal) cached-result))))
+      (let ((owner (nft-get-owner? enhanced-nft token-id)))
+        (begin
+          (var-set cache-miss-count (+ (var-get cache-miss-count) u1))
+          (try! (cache-data cache-key (unwrap-panic (to-consensus-buff? owner))))
+          (ok owner))))))
+
+;; Cache statistics and management
+(define-read-only (get-cache-stats)
+  {
+    enabled: (var-get cache-enabled),
+    hit-count: (var-get cache-hit-count),
+    miss-count: (var-get cache-miss-count),
+    hit-rate: (if (> (+ (var-get cache-hit-count) (var-get cache-miss-count)) u0)
+      (/ (* (var-get cache-hit-count) u10000) (+ (var-get cache-hit-count) (var-get cache-miss-count)))
+      u0),
+    total-cached-items: (var-get cache-lru-counter)
   })
-  (ok true))
 
-(define-private (get-cached-data (cache-key (buff 32)))
-  (match (map-get? metadata-cache cache-key)
-    cache-entry (if (< block-height (get expiry-block cache-entry))
+;; Cache eviction based on LRU
+(define-private (evict-lru-cache)
+  (let ((oldest-key (map-get? cache-lru-order u1)))
+    (match oldest-key
+      key (begin
+        (map-delete metadata-cache key)
+        (map-delete cache-lru-order u1)
+        ;; Shift all LRU entries down
+        (try! (shift-lru-entries))
+        (ok true))
+      (ok false))))
+
+(define-private (shift-lru-entries)
+  (let ((counter (var-get cache-lru-counter)))
+    (try! (fold shift-lru-helper (list u2 u3 u4 u5 u6 u7 u8 u9 u10) (ok u1)))
+    (var-set cache-lru-counter (if (> counter u1) (- counter u1) u0))
+    (ok true)))
+
+(define-private (shift-lru-helper (index uint) (acc (response uint uint)))
+  (match acc
+    success-index (match (map-get? cache-lru-order index)
+      key (begin
+        (map-set cache-lru-order (- index u1) key)
+        (map-delete cache-lru-order index)
+        (ok (+ success-index u1)))
+      (ok success-index))
+    error error))
+
+;; Update LRU order when cache is accessed
+(define-private (update-lru-order (cache-key (buff 32)))
+  (let ((counter (var-get cache-lru-counter)))
+    (if (< counter u10)
       (begin
-        (map-set metadata-cache cache-key 
-          (merge cache-entry {
-            access-count: (+ (get access-count cache-entry) u1),
-            last-accessed: block-height
-          }))
-        (some (get cached-data cache-entry)))
-      none)
-    none))
+        (map-set cache-lru-order (+ counter u1) cache-key)
+        (var-set cache-lru-counter (+ counter u1)))
+      (begin
+        (try! (evict-lru-cache))
+        (map-set cache-lru-order u10 cache-key)))
+    (ok true)))
+
+;; Enhanced cache-data function with LRU management
+(define-private (cache-data-with-lru (cache-key (buff 32)) (data (buff 256)))
+  (begin
+    (map-set metadata-cache cache-key {
+      cached-data: data,
+      access-count: u1,
+      last-accessed: block-height,
+      expiry-block: (+ block-height u1000)
+    })
+    (try! (update-lru-order cache-key))
+    (ok true)))
+
+;; Cache invalidation functions
+(define-public (invalidate-cache (cache-key (buff 32)))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-OWNER-ONLY)
+    (map-delete metadata-cache cache-key)
+    (ok true)))
+
+(define-public (clear-all-cache)
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-OWNER-ONLY)
+    (var-set cache-hit-count u0)
+    (var-set cache-miss-count u0)
+    (var-set cache-lru-counter u0)
+    ;; Note: In a real implementation, we'd iterate through all cache entries
+    (print {
+      notification: "cache-cleared",
+      payload: {
+        admin: tx-sender,
+        block-height: block-height
+      }
+    })
+    (ok true)))
+
+(define-public (set-cache-enabled (enabled bool))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-OWNER-ONLY)
+    (var-set cache-enabled enabled)
+    (print {
+      notification: "cache-status-changed",
+      payload: {
+        enabled: enabled,
+        admin: tx-sender
+      }
+    })
+    (ok true)))
 
 ;; Authorization helper
 (define-private (is-authorized (owner principal) (token-id uint))
