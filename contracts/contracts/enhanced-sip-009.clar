@@ -1450,15 +1450,285 @@
         seller-amount: (- sale-amount platform-fee)
       })))
 
-;; Get trading statistics
-(define-read-only (get-trading-stats)
+;; Security Audit Module - Circuit Breaker System
+(define-map circuit-breakers (string-ascii 32) {
+  threshold: uint,
+  current-count: uint,
+  time-window: uint,
+  last-reset: uint,
+  triggered: bool,
+  auto-reset: bool
+})
+
+(define-map security-events uint {
+  event-type: (string-ascii 32),
+  severity: (string-ascii 16),
+  description: (string-ascii 256),
+  triggered-by: principal,
+  detected-at: uint,
+  resolved: bool,
+  resolution-notes: (string-ascii 256)
+})
+
+(define-map suspicious-activities principal {
+  activity-count: uint,
+  last-activity: uint,
+  flagged: bool,
+  risk-score: uint,
+  activities: (list 10 (string-ascii 64))
+})
+
+(define-data-var next-security-event-id uint u1)
+(define-data-var security-monitoring-enabled bool true)
+(define-data-var emergency-pause-enabled bool false)
+
+;; Initialize circuit breakers
+(define-private (init-circuit-breakers)
+  (begin
+    (map-set circuit-breakers "rapid-transfers" {
+      threshold: u10,
+      current-count: u0,
+      time-window: u100, ;; 100 blocks
+      last-reset: block-height,
+      triggered: false,
+      auto-reset: true
+    })
+    (map-set circuit-breakers "high-value-trades" {
+      threshold: u5,
+      current-count: u0,
+      time-window: u50,
+      last-reset: block-height,
+      triggered: false,
+      auto-reset: true
+    })
+    (map-set circuit-breakers "metadata-changes" {
+      threshold: u20,
+      current-count: u0,
+      time-window: u200,
+      last-reset: block-height,
+      triggered: false,
+      auto-reset: true
+    })
+    (ok true)))
+
+;; Check and update circuit breaker
+(define-private (check-circuit-breaker (breaker-type (string-ascii 32)))
+  (match (map-get? circuit-breakers breaker-type)
+    breaker (let ((time-elapsed (- block-height (get last-reset breaker))))
+      (if (>= time-elapsed (get time-window breaker))
+        ;; Reset the circuit breaker
+        (begin
+          (map-set circuit-breakers breaker-type (merge breaker {
+            current-count: u1,
+            last-reset: block-height,
+            triggered: false
+          }))
+          (ok false))
+        ;; Check if threshold is exceeded
+        (let ((new-count (+ (get current-count breaker) u1)))
+          (if (>= new-count (get threshold breaker))
+            (begin
+              (map-set circuit-breakers breaker-type (merge breaker {
+                current-count: new-count,
+                triggered: true
+              }))
+              (try! (log-security-event "circuit-breaker-triggered" "high" 
+                (concat "Circuit breaker " breaker-type " triggered")))
+              (ok true))
+            (begin
+              (map-set circuit-breakers breaker-type (merge breaker {
+                current-count: new-count
+              }))
+              (ok false))))))
+    (ok false)))
+
+;; Log security event
+(define-private (log-security-event 
+  (event-type (string-ascii 32))
+  (severity (string-ascii 16))
+  (description (string-ascii 256)))
+  (let ((event-id (var-get next-security-event-id)))
+    (begin
+      (map-set security-events event-id {
+        event-type: event-type,
+        severity: severity,
+        description: description,
+        triggered-by: tx-sender,
+        detected-at: block-height,
+        resolved: false,
+        resolution-notes: ""
+      })
+      
+      (var-set next-security-event-id (+ event-id u1))
+      
+      (print {
+        notification: "security-event-logged",
+        payload: {
+          event-id: event-id,
+          event-type: event-type,
+          severity: severity,
+          triggered-by: tx-sender
+        }
+      })
+      
+      (ok event-id))))
+
+;; Track suspicious activity
+(define-private (track-suspicious-activity (activity-type (string-ascii 64)))
+  (let ((current-activity (default-to {
+    activity-count: u0,
+    last-activity: u0,
+    flagged: false,
+    risk-score: u0,
+    activities: (list)
+  } (map-get? suspicious-activities tx-sender))))
+    (let ((new-count (+ (get activity-count current-activity) u1))
+          (new-activities (unwrap-panic (as-max-len? 
+            (append (get activities current-activity) activity-type) u10))))
+      (begin
+        (map-set suspicious-activities tx-sender {
+          activity-count: new-count,
+          last-activity: block-height,
+          flagged: (> new-count u5),
+          risk-score: (calculate-risk-score new-count (get activities current-activity)),
+          activities: new-activities
+        })
+        
+        ;; Log if flagged
+        (if (> new-count u5)
+          (try! (log-security-event "suspicious-activity" "medium" 
+            (concat "User flagged for suspicious activity: " activity-type)))
+          (ok u0))
+        
+        (ok true)))))
+
+;; Calculate risk score
+(define-private (calculate-risk-score (activity-count uint) (activities (list 10 (string-ascii 64))))
+  (let ((base-score (* activity-count u10))
+        (diversity-penalty (if (< (len activities) u3) u20 u0)))
+    (+ base-score diversity-penalty)))
+
+;; Enhanced transfer with security checks
+(define-public (secure-transfer (token-id uint) (sender principal) (recipient principal))
+  (begin
+    (asserts! (not (var-get contract-paused)) ERR-CONTRACT-PAUSED)
+    (asserts! (not (var-get emergency-pause-enabled)) ERR-CONTRACT-PAUSED)
+    (asserts! (is-authorized sender token-id) ERR-UNAUTHORIZED)
+    (asserts! (not (is-eq sender recipient)) ERR-INVALID-RECIPIENT)
+    
+    ;; Security checks
+    (asserts! (var-get security-monitoring-enabled) ERR-CONTRACT-PAUSED)
+    
+    ;; Check circuit breakers
+    (let ((breaker-triggered (try! (check-circuit-breaker "rapid-transfers"))))
+      (asserts! (not breaker-triggered) ERR-CONTRACT-PAUSED))
+    
+    ;; Track activity
+    (try! (track-suspicious-activity "transfer"))
+    
+    ;; Check if user is flagged
+    (match (map-get? suspicious-activities tx-sender)
+      activity (asserts! (not (get flagged activity)) ERR-UNAUTHORIZED)
+      true)
+    
+    (try! (nft-transfer? enhanced-nft token-id sender recipient))
+    
+    (print {
+      notification: "secure-nft-transfer",
+      payload: {
+        token-id: token-id,
+        sender: sender,
+        recipient: recipient,
+        block-height: block-height,
+        security-checked: true
+      }
+    })
+    
+    (ok true)))
+
+;; Emergency pause system
+(define-public (emergency-pause (reason (string-ascii 256)))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-OWNER-ONLY)
+    (var-set emergency-pause-enabled true)
+    
+    (try! (log-security-event "emergency-pause" "critical" reason))
+    
+    (print {
+      notification: "emergency-pause-activated",
+      payload: {
+        reason: reason,
+        activated-by: tx-sender,
+        activated-at: block-height
+      }
+    })
+    
+    (ok true)))
+
+;; Resume from emergency pause
+(define-public (resume-operations (resolution-notes (string-ascii 256)))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-OWNER-ONLY)
+    (asserts! (var-get emergency-pause-enabled) ERR-UNAUTHORIZED)
+    
+    (var-set emergency-pause-enabled false)
+    
+    (try! (log-security-event "operations-resumed" "info" resolution-notes))
+    
+    (print {
+      notification: "operations-resumed",
+      payload: {
+        resolution-notes: resolution-notes,
+        resumed-by: tx-sender,
+        resumed-at: block-height
+      }
+    })
+    
+    (ok true)))
+
+;; Resolve security event
+(define-public (resolve-security-event (event-id uint) (resolution-notes (string-ascii 256)))
+  (let ((event (unwrap! (map-get? security-events event-id) ERR-TOKEN-NOT-FOUND)))
+    (begin
+      (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-OWNER-ONLY)
+      (asserts! (not (get resolved event)) ERR-UNAUTHORIZED)
+      
+      (map-set security-events event-id (merge event {
+        resolved: true,
+        resolution-notes: resolution-notes
+      }))
+      
+      (print {
+        notification: "security-event-resolved",
+        payload: {
+          event-id: event-id,
+          resolved-by: tx-sender,
+          resolution-notes: resolution-notes
+        }
+      })
+      
+      (ok true))))
+
+;; Get security status
+(define-read-only (get-security-status)
   {
-    platform-fee-percentage: (var-get trading-fee-percentage),
-    platform-fee-recipient: (var-get platform-fee-recipient),
-    total-distributions: (- (var-get next-distribution-id) u1),
-    next-auction-id: (var-get next-auction-id),
-    next-bundle-id: (var-get next-bundle-id)
+    monitoring-enabled: (var-get security-monitoring-enabled),
+    emergency-pause: (var-get emergency-pause-enabled),
+    contract-paused: (var-get contract-paused),
+    total-security-events: (- (var-get next-security-event-id) u1)
   })
+
+;; Get circuit breaker status
+(define-read-only (get-circuit-breaker-status (breaker-type (string-ascii 32)))
+  (map-get? circuit-breakers breaker-type))
+
+;; Get security event
+(define-read-only (get-security-event (event-id uint))
+  (map-get? security-events event-id))
+
+;; Get suspicious activity info
+(define-read-only (get-suspicious-activity-info (user principal))
+  (map-get? suspicious-activities user))
 (define-map listings uint {
   seller: principal,
   price: uint,
