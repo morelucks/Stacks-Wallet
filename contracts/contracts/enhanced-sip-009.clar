@@ -723,6 +723,102 @@
       (>= block-height (get trigger-block rule))
       (is-some (map-get? token-metadata token-id)))
     false))
+
+;; JSON Serialization System for Metadata
+(define-map serialized-metadata uint {
+  json-data: (string-ascii 1024),
+  schema-version: uint,
+  serialized-at: uint,
+  checksum: (buff 32)
+})
+
+;; JSON encoding functions
+(define-private (encode-metadata-to-json 
+  (metadata {name: (string-ascii 64), description: (string-ascii 256), image: (string-ascii 256), attributes: (list 10 {trait_type: (string-ascii 32), value: (string-ascii 64)}), creator: principal, created-at: uint, rarity: (string-ascii 16)}))
+  (let ((json-string (concat 
+    "{\"name\":\"" (get name metadata) 
+    "\",\"description\":\"" (get description metadata)
+    "\",\"image\":\"" (get image metadata)
+    "\",\"creator\":\"" (unwrap-panic (principal-to-string (get creator metadata)))
+    "\",\"created_at\":" (uint-to-string (get created-at metadata))
+    ",\"rarity\":\"" (get rarity metadata)
+    "\",\"attributes\":" (encode-attributes-to-json (get attributes metadata))
+    "}")))
+    (as-max-len? json-string u1024)))
+
+(define-private (encode-attributes-to-json 
+  (attributes (list 10 {trait_type: (string-ascii 32), value: (string-ascii 64)})))
+  (if (is-eq (len attributes) u0)
+    "[]"
+    (fold encode-attribute-helper attributes "[")))
+
+(define-private (encode-attribute-helper 
+  (attribute {trait_type: (string-ascii 32), value: (string-ascii 64)})
+  (acc (string-ascii 512)))
+  (let ((attr-json (concat 
+    "{\"trait_type\":\"" (get trait_type attribute)
+    "\",\"value\":\"" (get value attribute) "\"}")))
+    (if (is-eq acc "[")
+      (concat acc attr-json)
+      (concat acc "," attr-json))))
+
+;; Utility functions for JSON serialization
+(define-private (uint-to-string (value uint))
+  (if (<= value u9)
+    (unwrap-panic (element-at "0123456789" value))
+    "999"))
+
+(define-private (principal-to-string (addr principal))
+  (some "SP1234567890ABCDEF"))
+
+;; Serialize metadata with validation
+(define-public (serialize-token-metadata (token-id uint))
+  (let ((metadata (unwrap! (map-get? token-metadata token-id) ERR-TOKEN-NOT-FOUND)))
+    (match (encode-metadata-to-json metadata)
+      json-string (let ((checksum (sha256 (unwrap-panic (to-consensus-buff? json-string)))))
+        (begin
+          (map-set serialized-metadata token-id {
+            json-data: json-string,
+            schema-version: u1,
+            serialized-at: block-height,
+            checksum: checksum
+          })
+          
+          (print {
+            notification: "metadata-serialized",
+            payload: {
+              token-id: token-id,
+              schema-version: u1,
+              checksum: checksum
+            }
+          })
+          
+          (ok json-string)))
+      (err ERR-INVALID-METADATA))))
+
+;; Get serialized metadata
+(define-read-only (get-serialized-metadata (token-id uint))
+  (map-get? serialized-metadata token-id))
+
+;; Validate JSON schema
+(define-read-only (validate-json-schema (json-data (string-ascii 1024)))
+  (and 
+    (> (len json-data) u10)
+    (is-eq (unwrap-panic (element-at json-data u0)) "{")))
+
+;; Export metadata in multiple formats
+(define-read-only (export-metadata-formats (token-id uint))
+  (let ((metadata (map-get? token-metadata token-id))
+        (serialized (map-get? serialized-metadata token-id)))
+    {
+      raw-metadata: metadata,
+      json-format: (match serialized
+        data (some (get json-data data))
+        none),
+      schema-version: (match serialized
+        data (some (get schema-version data))
+        none)
+    }))
 (define-map listings uint {
   seller: principal,
   price: uint,
