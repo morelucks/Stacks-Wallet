@@ -401,6 +401,205 @@
     
     (ok true)))
 
+;; Bridge governance and voting system
+(define-map governance-proposals uint {
+  proposal-type: (string-ascii 32), ;; "fee-change", "validator-add", "chain-add", "parameter-update"
+  title: (string-ascii 128),
+  description: (string-ascii 512),
+  proposer: principal,
+  created-at: uint,
+  voting-ends: uint,
+  votes-for: uint,
+  votes-against: uint,
+  total-voting-power: uint,
+  status: (string-ascii 16), ;; "active", "passed", "rejected", "executed"
+  execution-data: (optional (string-ascii 256))
+})
+
+(define-map voter-records {proposal-id: uint, voter: principal} {
+  vote: bool, ;; true = for, false = against
+  voting-power: uint,
+  voted-at: uint
+})
+
+(define-data-var next-proposal-id uint u1)
+(define-data-var governance-enabled bool true)
+(define-data-var min-voting-period uint u144) ;; ~24 hours
+(define-data-var quorum-threshold uint u51) ;; 51% quorum required
+
+;; Create governance proposal
+(define-public (create-governance-proposal 
+  (proposal-type (string-ascii 32))
+  (title (string-ascii 128))
+  (description (string-ascii 512))
+  (voting-period uint))
+  (let ((proposal-id (var-get next-proposal-id)))
+    (begin
+      (asserts! (var-get governance-enabled) ERR-BRIDGE-DISABLED)
+      (asserts! (>= voting-period (var-get min-voting-period)) ERR-INVALID-REQUEST)
+      (asserts! (is-validator-or-stakeholder tx-sender) ERR-NOT-AUTHORIZED)
+      
+      (map-set governance-proposals proposal-id {
+        proposal-type: proposal-type,
+        title: title,
+        description: description,
+        proposer: tx-sender,
+        created-at: block-height,
+        voting-ends: (+ block-height voting-period),
+        votes-for: u0,
+        votes-against: u0,
+        total-voting-power: u0,
+        status: "active",
+        execution-data: none
+      })
+      
+      (var-set next-proposal-id (+ proposal-id u1))
+      
+      (print {
+        notification: "governance-proposal-created",
+        payload: {
+          proposal-id: proposal-id,
+          proposal-type: proposal-type,
+          title: title,
+          proposer: tx-sender,
+          voting-ends: (+ block-height voting-period)
+        }
+      })
+      
+      (ok proposal-id))))
+
+;; Vote on governance proposal
+(define-public (vote-on-proposal (proposal-id uint) (vote bool))
+  (let ((proposal (unwrap! (map-get? governance-proposals proposal-id) ERR-INVALID-REQUEST))
+        (voting-power (calculate-voting-power tx-sender))
+        (vote-key {proposal-id: proposal-id, voter: tx-sender}))
+    (begin
+      (asserts! (is-eq (get status proposal) "active") ERR-INVALID-REQUEST)
+      (asserts! (< block-height (get voting-ends proposal)) ERR-REQUEST-EXPIRED)
+      (asserts! (is-none (map-get? voter-records vote-key)) ERR-INVALID-REQUEST) ;; No double voting
+      (asserts! (> voting-power u0) ERR-NOT-AUTHORIZED)
+      
+      ;; Record vote
+      (map-set voter-records vote-key {
+        vote: vote,
+        voting-power: voting-power,
+        voted-at: block-height
+      })
+      
+      ;; Update proposal vote counts
+      (map-set governance-proposals proposal-id
+        (merge proposal {
+          votes-for: (if vote 
+            (+ (get votes-for proposal) voting-power)
+            (get votes-for proposal)),
+          votes-against: (if vote
+            (get votes-against proposal)
+            (+ (get votes-against proposal) voting-power)),
+          total-voting-power: (+ (get total-voting-power proposal) voting-power)
+        }))
+      
+      (print {
+        notification: "vote-cast",
+        payload: {
+          proposal-id: proposal-id,
+          voter: tx-sender,
+          vote: vote,
+          voting-power: voting-power
+        }
+      })
+      
+      (ok true))))
+
+;; Calculate voting power based on validator stake and reputation
+(define-private (calculate-voting-power (user principal))
+  (match (map-get? bridge-validators user)
+    validator-info (if (get active validator-info)
+      (+ (/ (get stake-amount validator-info) u1000000) ;; 1 vote per STX staked
+         (/ (get reputation-score validator-info) u10)) ;; Bonus for reputation
+      u0)
+    u0)) ;; Non-validators have no voting power for now
+
+;; Check if user is validator or stakeholder
+(define-private (is-validator-or-stakeholder (user principal))
+  (match (map-get? bridge-validators user)
+    validator-info (get active validator-info)
+    false))
+
+;; Finalize proposal voting
+(define-public (finalize-proposal (proposal-id uint))
+  (let ((proposal (unwrap! (map-get? governance-proposals proposal-id) ERR-INVALID-REQUEST)))
+    (begin
+      (asserts! (is-eq (get status proposal) "active") ERR-INVALID-REQUEST)
+      (asserts! (>= block-height (get voting-ends proposal)) ERR-INVALID-REQUEST)
+      
+      (let ((total-votes (+ (get votes-for proposal) (get votes-against proposal)))
+            (quorum-met (>= (* (get total-voting-power proposal) u100) 
+                           (* (get-total-voting-power) (var-get quorum-threshold))))
+            (proposal-passed (and quorum-met (> (get votes-for proposal) (get votes-against proposal)))))
+        
+        (map-set governance-proposals proposal-id
+          (merge proposal {
+            status: (if proposal-passed "passed" "rejected")
+          }))
+        
+        (print {
+          notification: "proposal-finalized",
+          payload: {
+            proposal-id: proposal-id,
+            status: (if proposal-passed "passed" "rejected"),
+            votes-for: (get votes-for proposal),
+            votes-against: (get votes-against proposal),
+            quorum-met: quorum-met
+          }
+        })
+        
+        (ok proposal-passed)))))
+
+;; Get total voting power in system
+(define-private (get-total-voting-power)
+  u1000) ;; Simplified - would calculate from all validators
+
+;; Execute passed proposal
+(define-public (execute-proposal (proposal-id uint))
+  (let ((proposal (unwrap! (map-get? governance-proposals proposal-id) ERR-INVALID-REQUEST)))
+    (begin
+      (asserts! (is-eq (get status proposal) "passed") ERR-INVALID-REQUEST)
+      (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED) ;; Only admin can execute for now
+      
+      ;; Execute based on proposal type
+      (try! (execute-proposal-action (get proposal-type proposal) proposal-id))
+      
+      (map-set governance-proposals proposal-id
+        (merge proposal {status: "executed"}))
+      
+      (print {
+        notification: "proposal-executed",
+        payload: {
+          proposal-id: proposal-id,
+          proposal-type: (get proposal-type proposal)
+        }
+      })
+      
+      (ok true))))
+
+;; Execute specific proposal actions
+(define-private (execute-proposal-action (proposal-type (string-ascii 32)) (proposal-id uint))
+  (if (is-eq proposal-type "fee-change")
+    (ok true) ;; Would implement fee changes
+    (if (is-eq proposal-type "validator-add")
+      (ok true) ;; Would add new validator
+      (if (is-eq proposal-type "chain-add")
+        (ok true) ;; Would add new supported chain
+        (ok true))))) ;; Default case
+
+;; Get proposal details
+(define-read-only (get-proposal (proposal-id uint))
+  (map-get? governance-proposals proposal-id))
+
+;; Get vote record
+(define-read-only (get-vote-record (proposal-id uint) (voter principal))
+  (map-get? voter-records {proposal-id: proposal-id, voter: voter}))
+
 ;; Dynamic bridge fee management
 (define-map dynamic-pricing uint {
   base-fee: uint,
