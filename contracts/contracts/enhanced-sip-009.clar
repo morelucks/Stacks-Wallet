@@ -1236,9 +1236,229 @@
 (define-read-only (get-bundle-info (bundle-id uint))
   (map-get? bundle-sales bundle-id))
 
-;; Get fractional ownership info
-(define-read-only (get-fractional-info (token-id uint))
-  (map-get? fractional-ownership token-id))
+;; Trading Fee Distribution System
+(define-map fee-recipients (string-ascii 32) {
+  recipient: principal,
+  percentage: uint,
+  active: bool
+})
+
+(define-map fee-distribution-history uint {
+  transaction-type: (string-ascii 32),
+  total-amount: uint,
+  platform-fee: uint,
+  creator-royalty: uint,
+  seller-amount: uint,
+  distributed-at: uint,
+  token-id: uint
+})
+
+(define-data-var platform-fee-recipient principal CONTRACT-OWNER)
+(define-data-var next-distribution-id uint u1)
+
+;; Set fee recipients
+(define-public (set-fee-recipient (recipient-type (string-ascii 32)) (recipient principal) (percentage uint))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-OWNER-ONLY)
+    (asserts! (<= percentage u10000) ERR-ROYALTY-EXCEEDED) ;; Max 100%
+    
+    (map-set fee-recipients recipient-type {
+      recipient: recipient,
+      percentage: percentage,
+      active: true
+    })
+    
+    (print {
+      notification: "fee-recipient-set",
+      payload: {
+        recipient-type: recipient-type,
+        recipient: recipient,
+        percentage: percentage
+      }
+    })
+    
+    (ok true)))
+
+;; Calculate and distribute trading fees
+(define-private (distribute-trading-fees 
+  (token-id uint)
+  (sale-amount uint)
+  (transaction-type (string-ascii 32)))
+  (let ((platform-fee (/ (* sale-amount (var-get trading-fee-percentage)) u10000))
+        (royalty-info (map-get? token-royalties token-id))
+        (distribution-id (var-get next-distribution-id)))
+    (match royalty-info
+      royalty (let ((creator-royalty (/ (* sale-amount (get percentage royalty)) u10000))
+                    (total-fees (+ platform-fee creator-royalty))
+                    (seller-amount (- sale-amount total-fees)))
+        (begin
+          ;; Record distribution
+          (map-set fee-distribution-history distribution-id {
+            transaction-type: transaction-type,
+            total-amount: sale-amount,
+            platform-fee: platform-fee,
+            creator-royalty: creator-royalty,
+            seller-amount: seller-amount,
+            distributed-at: block-height,
+            token-id: token-id
+          })
+          
+          (var-set next-distribution-id (+ distribution-id u1))
+          
+          (print {
+            notification: "fees-distributed",
+            payload: {
+              distribution-id: distribution-id,
+              token-id: token-id,
+              platform-fee: platform-fee,
+              creator-royalty: creator-royalty,
+              seller-amount: seller-amount
+            }
+          })
+          
+          (ok {
+            platform-fee: platform-fee,
+            creator-royalty: creator-royalty,
+            seller-amount: seller-amount
+          })))
+      ;; No royalty info
+      (let ((seller-amount (- sale-amount platform-fee)))
+        (begin
+          (map-set fee-distribution-history distribution-id {
+            transaction-type: transaction-type,
+            total-amount: sale-amount,
+            platform-fee: platform-fee,
+            creator-royalty: u0,
+            seller-amount: seller-amount,
+            distributed-at: block-height,
+            token-id: token-id
+          })
+          
+          (var-set next-distribution-id (+ distribution-id u1))
+          
+          (ok {
+            platform-fee: platform-fee,
+            creator-royalty: u0,
+            seller-amount: seller-amount
+          }))))))
+
+;; Enhanced bid function with fee distribution
+(define-public (bid-dutch-auction-with-fees (auction-id uint))
+  (let ((auction (unwrap! (map-get? dutch-auctions auction-id) ERR-TOKEN-NOT-FOUND))
+        (current-price (get-dutch-auction-price auction-id)))
+    (begin
+      (asserts! (get active auction) ERR-UNAUTHORIZED)
+      (asserts! (< block-height (get end-block auction)) ERR-UNAUTHORIZED)
+      (asserts! (not (is-eq tx-sender (get seller auction))) ERR-UNAUTHORIZED)
+      
+      ;; Calculate and distribute fees
+      (let ((fee-distribution (try! (distribute-trading-fees (get token-id auction) current-price "dutch-auction"))))
+        (begin
+          ;; Transfer NFT to buyer
+          (try! (nft-transfer? enhanced-nft (get token-id auction) (get seller auction) tx-sender))
+          
+          ;; Mark auction as inactive
+          (map-set dutch-auctions auction-id (merge auction {active: false}))
+          
+          (print {
+            notification: "dutch-auction-completed-with-fees",
+            payload: {
+              auction-id: auction-id,
+              token-id: (get token-id auction),
+              buyer: tx-sender,
+              final-price: current-price,
+              fee-distribution: fee-distribution
+            }
+          })
+          
+          (ok current-price))))))
+
+;; Enhanced bundle purchase with fee distribution
+(define-public (purchase-bundle-with-fees (bundle-id uint))
+  (let ((bundle (unwrap! (map-get? bundle-sales bundle-id) ERR-TOKEN-NOT-FOUND)))
+    (begin
+      (asserts! (get active bundle) ERR-UNAUTHORIZED)
+      (asserts! (< block-height (get expires-at bundle)) ERR-UNAUTHORIZED)
+      (asserts! (not (is-eq tx-sender (get seller bundle))) ERR-UNAUTHORIZED)
+      
+      ;; Calculate fees for bundle (use first token for royalty calculation)
+      (let ((first-token-id (unwrap! (element-at (get token-ids bundle) u0) ERR-TOKEN-NOT-FOUND))
+            (fee-distribution (try! (distribute-trading-fees first-token-id (get total-price bundle) "bundle-sale"))))
+        (begin
+          ;; Transfer all tokens in bundle atomically
+          (try! (transfer-bundle-tokens (get token-ids bundle) (get seller bundle) tx-sender))
+          
+          ;; Mark bundle as sold
+          (map-set bundle-sales bundle-id (merge bundle {active: false}))
+          
+          (print {
+            notification: "bundle-purchased-with-fees",
+            payload: {
+              bundle-id: bundle-id,
+              buyer: tx-sender,
+              token-count: (len (get token-ids bundle)),
+              total-price: (get total-price bundle),
+              fee-distribution: fee-distribution
+            }
+          })
+          
+          (ok true))))))
+
+;; Set platform fee percentage
+(define-public (set-platform-fee-percentage (new-percentage uint))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-OWNER-ONLY)
+    (asserts! (<= new-percentage u1000) ERR-ROYALTY-EXCEEDED) ;; Max 10%
+    
+    (var-set trading-fee-percentage new-percentage)
+    
+    (print {
+      notification: "platform-fee-updated",
+      payload: {
+        old-percentage: (var-get trading-fee-percentage),
+        new-percentage: new-percentage,
+        updated-by: tx-sender
+      }
+    })
+    
+    (ok true)))
+
+;; Get fee distribution history
+(define-read-only (get-fee-distribution-history (distribution-id uint))
+  (map-get? fee-distribution-history distribution-id))
+
+;; Get fee recipient info
+(define-read-only (get-fee-recipient (recipient-type (string-ascii 32)))
+  (map-get? fee-recipients recipient-type))
+
+;; Calculate estimated fees for a sale
+(define-read-only (calculate-estimated-fees (token-id uint) (sale-amount uint))
+  (let ((platform-fee (/ (* sale-amount (var-get trading-fee-percentage)) u10000))
+        (royalty-info (map-get? token-royalties token-id)))
+    (match royalty-info
+      royalty (let ((creator-royalty (/ (* sale-amount (get percentage royalty)) u10000)))
+        {
+          platform-fee: platform-fee,
+          creator-royalty: creator-royalty,
+          total-fees: (+ platform-fee creator-royalty),
+          seller-amount: (- sale-amount (+ platform-fee creator-royalty))
+        })
+      {
+        platform-fee: platform-fee,
+        creator-royalty: u0,
+        total-fees: platform-fee,
+        seller-amount: (- sale-amount platform-fee)
+      })))
+
+;; Get trading statistics
+(define-read-only (get-trading-stats)
+  {
+    platform-fee-percentage: (var-get trading-fee-percentage),
+    platform-fee-recipient: (var-get platform-fee-recipient),
+    total-distributions: (- (var-get next-distribution-id) u1),
+    next-auction-id: (var-get next-auction-id),
+    next-bundle-id: (var-get next-bundle-id)
+  })
 (define-map listings uint {
   seller: principal,
   price: uint,
