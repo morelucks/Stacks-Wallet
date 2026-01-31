@@ -2252,14 +2252,243 @@
         
         (ok new-period)))))
 
-;; Toggle analytics
-(define-public (set-analytics-enabled (enabled bool))
+;; Data Export Functionality
+(define-map export-requests uint {
+  requester: principal,
+  export-type: (string-ascii 32),
+  format: (string-ascii 16),
+  filters: (string-ascii 256),
+  status: (string-ascii 16),
+  created-at: uint,
+  completed-at: uint,
+  data-hash: (buff 32)
+})
+
+(define-map exported-data uint {
+  csv-data: (string-ascii 2048),
+  json-data: (string-ascii 2048),
+  metadata: {
+    record-count: uint,
+    export-size: uint,
+    compression-used: bool
+  }
+})
+
+(define-data-var next-export-id uint u1)
+(define-data-var export-enabled bool true)
+
+;; Request data export
+(define-public (request-data-export 
+  (export-type (string-ascii 32))
+  (format (string-ascii 16))
+  (filters (string-ascii 256)))
+  (let ((export-id (var-get next-export-id)))
+    (begin
+      (asserts! (var-get export-enabled) ERR-CONTRACT-PAUSED)
+      (asserts! (or (is-eq format "csv") (is-eq format "json")) ERR-INVALID-METADATA)
+      
+      (map-set export-requests export-id {
+        requester: tx-sender,
+        export-type: export-type,
+        format: format,
+        filters: filters,
+        status: "pending",
+        created-at: block-height,
+        completed-at: u0,
+        data-hash: 0x00
+      })
+      
+      (var-set next-export-id (+ export-id u1))
+      
+      ;; Process export immediately for demo
+      (try! (process-export-request export-id))
+      
+      (print {
+        notification: "data-export-requested",
+        payload: {
+          export-id: export-id,
+          export-type: export-type,
+          format: format,
+          requester: tx-sender
+        }
+      })
+      
+      (ok export-id))))
+
+;; Process export request
+(define-private (process-export-request (export-id uint))
+  (let ((request (unwrap! (map-get? export-requests export-id) ERR-TOKEN-NOT-FOUND)))
+    (let ((export-type (get export-type request))
+          (format (get format request)))
+      (if (is-eq export-type "trading-metrics")
+        (try! (export-trading-metrics export-id format))
+        (if (is-eq export-type "user-behavior")
+          (try! (export-user-behavior export-id format))
+          (if (is-eq export-type "price-history")
+            (try! (export-price-history export-id format))
+            (err ERR-INVALID-METADATA)))))))
+
+;; Export trading metrics
+(define-private (export-trading-metrics (export-id uint) (format (string-ascii 16)))
+  (let ((current-period (var-get current-metrics-period))
+        (metrics (map-get? trading-metrics current-period)))
+    (match metrics
+      data (let ((csv-output (format-trading-metrics-csv data))
+                 (json-output (format-trading-metrics-json data))
+                 (data-hash (sha256 (unwrap-panic (to-consensus-buff? data)))))
+        (begin
+          (map-set exported-data export-id {
+            csv-data: csv-output,
+            json-data: json-output,
+            metadata: {
+              record-count: u1,
+              export-size: (+ (len csv-output) (len json-output)),
+              compression-used: false
+            }
+          })
+          
+          (map-set export-requests export-id (merge (unwrap-panic (map-get? export-requests export-id)) {
+            status: "completed",
+            completed-at: block-height,
+            data-hash: data-hash
+          }))
+          
+          (ok true)))
+      (err ERR-TOKEN-NOT-FOUND))))
+
+;; Format trading metrics as CSV
+(define-private (format-trading-metrics-csv 
+  (metrics {total-volume: uint, transaction-count: uint, average-price: uint, highest-sale: uint, lowest-sale: uint, unique-traders: uint, period-start: uint, period-end: uint}))
+  (concat 
+    "period,total_volume,transaction_count,average_price,highest_sale,lowest_sale,unique_traders\n"
+    (uint-to-string (get period-start metrics)) ","
+    (uint-to-string (get total-volume metrics)) ","
+    (uint-to-string (get transaction-count metrics)) ","
+    (uint-to-string (get average-price metrics)) ","
+    (uint-to-string (get highest-sale metrics)) ","
+    (uint-to-string (get lowest-sale metrics)) ","
+    (uint-to-string (get unique-traders metrics))))
+
+;; Format trading metrics as JSON
+(define-private (format-trading-metrics-json 
+  (metrics {total-volume: uint, transaction-count: uint, average-price: uint, highest-sale: uint, lowest-sale: uint, unique-traders: uint, period-start: uint, period-end: uint}))
+  (concat 
+    "{\"period_start\":" (uint-to-string (get period-start metrics))
+    ",\"total_volume\":" (uint-to-string (get total-volume metrics))
+    ",\"transaction_count\":" (uint-to-string (get transaction-count metrics))
+    ",\"average_price\":" (uint-to-string (get average-price metrics))
+    ",\"highest_sale\":" (uint-to-string (get highest-sale metrics))
+    ",\"lowest_sale\":" (uint-to-string (get lowest-sale metrics))
+    ",\"unique_traders\":" (uint-to-string (get unique-traders metrics))
+    "}"))
+
+;; Export user behavior data
+(define-private (export-user-behavior (export-id uint) (format (string-ascii 16)))
+  ;; Simplified - would iterate through user behavior data
+  (let ((sample-csv "user,total_transactions,total_volume,activity_score\nuser1,10,1000000,150")
+        (sample-json "{\"users\":[{\"user\":\"user1\",\"total_transactions\":10,\"total_volume\":1000000,\"activity_score\":150}]}")
+        (data-hash (sha256 (unwrap-panic (to-consensus-buff? sample-csv)))))
+    (begin
+      (map-set exported-data export-id {
+        csv-data: sample-csv,
+        json-data: sample-json,
+        metadata: {
+          record-count: u1,
+          export-size: (+ (len sample-csv) (len sample-json)),
+          compression-used: false
+        }
+      })
+      
+      (map-set export-requests export-id (merge (unwrap-panic (map-get? export-requests export-id)) {
+        status: "completed",
+        completed-at: block-height,
+        data-hash: data-hash
+      }))
+      
+      (ok true))))
+
+;; Export price history data
+(define-private (export-price-history (export-id uint) (format (string-ascii 16)))
+  ;; Simplified - would iterate through price history
+  (let ((sample-csv "token_id,price,timestamp,transaction_type,buyer,seller\n1,1000000,100,dutch-auction,buyer1,seller1")
+        (sample-json "{\"price_history\":[{\"token_id\":1,\"price\":1000000,\"timestamp\":100,\"transaction_type\":\"dutch-auction\"}]}")
+        (data-hash (sha256 (unwrap-panic (to-consensus-buff? sample-csv)))))
+    (begin
+      (map-set exported-data export-id {
+        csv-data: sample-csv,
+        json-data: sample-json,
+        metadata: {
+          record-count: u1,
+          export-size: (+ (len sample-csv) (len sample-json)),
+          compression-used: false
+        }
+      })
+      
+      (map-set export-requests export-id (merge (unwrap-panic (map-get? export-requests export-id)) {
+        status: "completed",
+        completed-at: block-height,
+        data-hash: data-hash
+      }))
+      
+      (ok true))))
+
+;; Get exported data
+(define-read-only (get-exported-data (export-id uint) (format (string-ascii 16)))
+  (match (map-get? exported-data export-id)
+    data (if (is-eq format "csv")
+      (some (get csv-data data))
+      (if (is-eq format "json")
+        (some (get json-data data))
+        none))
+    none))
+
+;; Get export request status
+(define-read-only (get-export-request (export-id uint))
+  (map-get? export-requests export-id))
+
+;; Batch export multiple data types
+(define-public (batch-export-data 
+  (export-types (list 5 (string-ascii 32)))
+  (format (string-ascii 16)))
+  (let ((batch-results (fold process-batch-export export-types (ok (list)))))
+    (match batch-results
+      export-ids (begin
+        (print {
+          notification: "batch-export-completed",
+          payload: {
+            export-ids: export-ids,
+            format: format,
+            count: (len export-ids)
+          }
+        })
+        (ok export-ids))
+      error error)))
+
+;; Process single export in batch
+(define-private (process-batch-export 
+  (export-type (string-ascii 32))
+  (acc (response (list 5 uint) uint)))
+  (match acc
+    export-ids (match (request-data-export export-type "csv" "")
+      export-id (ok (unwrap-panic (as-max-len? (append export-ids export-id) u5)))
+      error (err error))
+    error (err error)))
+
+;; Get export statistics
+(define-read-only (get-export-statistics)
+  {
+    total-exports: (- (var-get next-export-id) u1),
+    export-enabled: (var-get export-enabled)
+  })
+
+;; Set export enabled status
+(define-public (set-export-enabled (enabled bool))
   (begin
     (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-OWNER-ONLY)
-    (var-set analytics-enabled enabled)
+    (var-set export-enabled enabled)
     
     (print {
-      notification: "analytics-status-changed",
+      notification: "export-status-changed",
       payload: {
         enabled: enabled,
         changed-by: tx-sender
