@@ -10,7 +10,10 @@
   status: (string-ascii 16), ;; pending, confirmed, completed, failed
   created-at: uint,
   confirmed-at: (optional uint),
-  validator-signatures: (list 10 (buff 65))
+  validator-signatures: (list 10 (buff 65)),
+  proof-hash: (optional (buff 32)),
+  merkle-root: (optional (buff 32)),
+  proof-data: (optional (string-ascii 256))
 })
 
 (define-map locked-tokens uint {
