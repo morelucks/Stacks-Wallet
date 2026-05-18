@@ -1,54 +1,71 @@
+/**
+ * Bridge Test Utilities
+ * Helper class for SIP-009 cross-chain bridge contract tests on Stacks Network
+ *
+ * @module bridge-test-utils
+ */
+
 import { Cl } from '@stacks/transactions';
+import { BRIDGE_TEST_CONFIG } from './bridge-test-config';
 
 export class BridgeTestUtils {
   static readonly CONTRACT_NAME = 'sip-009-bridge';
-  
-  // Error codes from the contract
-  static readonly ERRORS = {
-    NOT_AUTHORIZED: 401,
-    TOKEN_LOCKED: 402,
-    INVALID_CHAIN: 403,
-    INSUFFICIENT_VALIDATORS: 404,
-    BRIDGE_DISABLED: 405,
-    INVALID_REQUEST: 406,
-    INSUFFICIENT_BALANCE: 407,
-    INVALID_SIGNATURE: 408,
-    REQUEST_EXPIRED: 409
+
+  /** Bridge error codes sourced from the centralised config */
+  static readonly ERRORS = BRIDGE_TEST_CONFIG.ERRORS;
+
+  /** Default chain fee and confirmation configuration */
+  static readonly DEFAULT_CHAINS: Record<string, { fee: number; confirmations: number }> = {
+    ethereum: { fee: 1_000_000, confirmations: 12 },
+    polygon: { fee: 500_000, confirmations: 20 },
+    arbitrum: { fee: 750_000, confirmations: 8 },
+    optimism: { fee: 600_000, confirmations: 10 },
   };
 
-  // Default chain configurations
-  static readonly DEFAULT_CHAINS = {
-    ethereum: { fee: 1000000, confirmations: 12 },
-    polygon: { fee: 500000, confirmations: 20 },
-    arbitrum: { fee: 750000, confirmations: 8 },
-    optimism: { fee: 600000, confirmations: 10 }
-  };
+  // -------------------------------------------------------------------------
+  // Validator management
+  // -------------------------------------------------------------------------
 
   /**
-   * Initialize bridge with validators
+   * Register one or more validators with the bridge contract.
+   * Returns the array of call results for assertion in tests.
    */
   static setupValidators(validators: string[], deployer: string) {
-    const results = [];
-    for (const validator of validators) {
-      const result = simnet.callPublicFn(
+    return validators.map(validator =>
+      simnet.callPublicFn(
         this.CONTRACT_NAME,
         'add-validator',
         [Cl.principal(validator)],
-        deployer
-      );
-      results.push(result);
-    }
-    return results;
+        deployer,
+      ),
+    );
   }
 
   /**
-   * Create a bridge request and return the request ID
+   * Retrieve validator metadata from the contract.
+   */
+  static getValidatorInfo(validator: string, caller: string) {
+    return simnet.callReadOnlyFn(
+      this.CONTRACT_NAME,
+      'get-validator-info',
+      [Cl.principal(validator)],
+      caller,
+    );
+  }
+
+  // -------------------------------------------------------------------------
+  // Bridge request lifecycle
+  // -------------------------------------------------------------------------
+
+  /**
+   * Initiate a bridge request for a given token.
+   * Returns the full call result (including the assigned request ID on success).
    */
   static createBridgeRequest(
     tokenId: number,
     targetChain: string,
     targetAddress: string,
-    sender: string
+    sender: string,
   ) {
     return simnet.callPublicFn(
       this.CONTRACT_NAME,
@@ -56,166 +73,135 @@ export class BridgeTestUtils {
       [
         Cl.uint(tokenId),
         Cl.stringAscii(targetChain),
-        Cl.stringAscii(targetAddress)
+        Cl.stringAscii(targetAddress),
       ],
-      sender
+      sender,
     );
   }
 
   /**
-   * Add validator signatures to a bridge request
+   * Submit validator signatures for a pending bridge request.
+   * Iterates over the provided signatures and validators in lock-step.
    */
   static addValidatorSignatures(
     requestId: number,
     signatures: Uint8Array[],
-    validators: string[]
+    validators: string[],
   ) {
-    const results = [];
-    for (let i = 0; i < signatures.length && i < validators.length; i++) {
-      const result = simnet.callPublicFn(
+    return signatures.slice(0, validators.length).map((sig, i) =>
+      simnet.callPublicFn(
         this.CONTRACT_NAME,
         'validate-bridge-request',
-        [Cl.uint(requestId), Cl.buffer(signatures[i])],
-        validators[i]
-      );
-      results.push(result);
-    }
-    return results;
-  }
-
-  /**
-   * Get bridge request details
-   */
-  static getBridgeRequest(requestId: number, caller: string) {
-    return simnet.callReadOnlyFn(
-      this.CONTRACT_NAME,
-      'get-bridge-request',
-      [Cl.uint(requestId)],
-      caller
+        [Cl.uint(requestId), Cl.buffer(sig)],
+        validators[i],
+      ),
     );
   }
 
   /**
-   * Get locked token information
-   */
-  static getLockedTokenInfo(tokenId: number, caller: string) {
-    return simnet.callReadOnlyFn(
-      this.CONTRACT_NAME,
-      'get-locked-token-info',
-      [Cl.uint(tokenId)],
-      caller
-    );
-  }
-
-  /**
-   * Check if token is locked
-   */
-  static isTokenLocked(tokenId: number, caller: string) {
-    return simnet.callReadOnlyFn(
-      this.CONTRACT_NAME,
-      'is-token-locked',
-      [Cl.uint(tokenId)],
-      caller
-    );
-  }
-
-  /**
-   * Get validator information
-   */
-  static getValidatorInfo(validator: string, caller: string) {
-    return simnet.callReadOnlyFn(
-      this.CONTRACT_NAME,
-      'get-validator-info',
-      [Cl.principal(validator)],
-      caller
-    );
-  }
-
-  /**
-   * Get chain configuration
-   */
-  static getChainConfig(chain: string, caller: string) {
-    return simnet.callReadOnlyFn(
-      this.CONTRACT_NAME,
-      'get-chain-config',
-      [Cl.stringAscii(chain)],
-      caller
-    );
-  }
-
-  /**
-   * Get bridge statistics
-   */
-  static getBridgeStats(chain: string, caller: string) {
-    return simnet.callReadOnlyFn(
-      this.CONTRACT_NAME,
-      'get-bridge-stats',
-      [Cl.stringAscii(chain)],
-      caller
-    );
-  }
-
-  /**
-   * Get bridge status
-   */
-  static getBridgeStatus(caller: string) {
-    return simnet.callReadOnlyFn(
-      this.CONTRACT_NAME,
-      'get-bridge-status',
-      [],
-      caller
-    );
-  }
-
-  /**
-   * Cancel bridge request
+   * Cancel a pending bridge request.
    */
   static cancelBridgeRequest(requestId: number, caller: string) {
     return simnet.callPublicFn(
       this.CONTRACT_NAME,
       'cancel-bridge-request',
       [Cl.uint(requestId)],
-      caller
+      caller,
     );
   }
 
   /**
-   * Complete bridge request
+   * Mark a bridge request as completed with the target-chain transaction hash.
    */
-  static completeBridgeRequest(
-    requestId: number,
-    targetTxHash: string,
-    caller: string
-  ) {
+  static completeBridgeRequest(requestId: number, targetTxHash: string, caller: string) {
     return simnet.callPublicFn(
       this.CONTRACT_NAME,
       'complete-bridge-request',
       [Cl.uint(requestId), Cl.stringAscii(targetTxHash)],
-      caller
+      caller,
     );
   }
 
-  /**
-   * Set bridge enabled/disabled
-   */
+  // -------------------------------------------------------------------------
+  // Read-only queries
+  // -------------------------------------------------------------------------
+
+  /** Fetch a bridge request by ID */
+  static getBridgeRequest(requestId: number, caller: string) {
+    return simnet.callReadOnlyFn(
+      this.CONTRACT_NAME,
+      'get-bridge-request',
+      [Cl.uint(requestId)],
+      caller,
+    );
+  }
+
+  /** Fetch locked-token metadata */
+  static getLockedTokenInfo(tokenId: number, caller: string) {
+    return simnet.callReadOnlyFn(
+      this.CONTRACT_NAME,
+      'get-locked-token-info',
+      [Cl.uint(tokenId)],
+      caller,
+    );
+  }
+
+  /** Check whether a token is currently locked in the bridge */
+  static isTokenLocked(tokenId: number, caller: string) {
+    return simnet.callReadOnlyFn(
+      this.CONTRACT_NAME,
+      'is-token-locked',
+      [Cl.uint(tokenId)],
+      caller,
+    );
+  }
+
+  /** Fetch per-chain bridge configuration */
+  static getChainConfig(chain: string, caller: string) {
+    return simnet.callReadOnlyFn(
+      this.CONTRACT_NAME,
+      'get-chain-config',
+      [Cl.stringAscii(chain)],
+      caller,
+    );
+  }
+
+  /** Fetch bridge statistics for a specific chain */
+  static getBridgeStats(chain: string, caller: string) {
+    return simnet.callReadOnlyFn(
+      this.CONTRACT_NAME,
+      'get-bridge-stats',
+      [Cl.stringAscii(chain)],
+      caller,
+    );
+  }
+
+  /** Fetch the global bridge enabled/disabled status */
+  static getBridgeStatus(caller: string) {
+    return simnet.callReadOnlyFn(this.CONTRACT_NAME, 'get-bridge-status', [], caller);
+  }
+
+  // -------------------------------------------------------------------------
+  // Administrative functions
+  // -------------------------------------------------------------------------
+
+  /** Enable or disable the bridge globally */
   static setBridgeEnabled(enabled: boolean, caller: string) {
     return simnet.callPublicFn(
       this.CONTRACT_NAME,
       'set-bridge-enabled',
       [Cl.bool(enabled)],
-      caller
+      caller,
     );
   }
 
-  /**
-   * Update chain configuration
-   */
+  /** Update the fee and confirmation settings for a chain */
   static updateChainConfig(
     chain: string,
     active: boolean,
     minConfirmations: number,
     bridgeFee: number,
-    caller: string
+    caller: string,
   ) {
     return simnet.callPublicFn(
       this.CONTRACT_NAME,
@@ -224,70 +210,70 @@ export class BridgeTestUtils {
         Cl.stringAscii(chain),
         Cl.bool(active),
         Cl.uint(minConfirmations),
-        Cl.uint(bridgeFee)
+        Cl.uint(bridgeFee),
       ],
-      caller
+      caller,
     );
   }
 
-  /**
-   * Emergency unlock token
-   */
+  /** Emergency unlock a token that is stuck in the bridge */
   static emergencyUnlockToken(tokenId: number, caller: string) {
     return simnet.callPublicFn(
       this.CONTRACT_NAME,
       'emergency-unlock-token',
       [Cl.uint(tokenId)],
-      caller
+      caller,
     );
   }
 
-  /**
-   * Grant user discount
-   */
+  /** Grant a fee discount to a specific user */
   static grantUserDiscount(
     user: string,
     discountPercentage: number,
     validBlocks: number,
-    caller: string
+    caller: string,
   ) {
     return simnet.callPublicFn(
       this.CONTRACT_NAME,
       'grant-user-discount',
-      [
-        Cl.principal(user),
-        Cl.uint(discountPercentage),
-        Cl.uint(validBlocks)
-      ],
-      caller
+      [Cl.principal(user), Cl.uint(discountPercentage), Cl.uint(validBlocks)],
+      caller,
     );
   }
 
+  // -------------------------------------------------------------------------
+  // Batch operations
+  // -------------------------------------------------------------------------
+
   /**
-   * Batch initiate bridge requests
+   * Initiate multiple bridge requests in a single contract call.
    */
   static batchInitiateBridgeRequests(
-    requests: Array<{tokenId: number, targetChain: string, targetAddress: string}>,
-    caller: string
+    requests: Array<{ tokenId: number; targetChain: string; targetAddress: string }>,
+    caller: string,
   ) {
-    const clarityRequests = requests.map(req => 
+    const clarityRequests = requests.map(req =>
       Cl.tuple({
         'token-id': Cl.uint(req.tokenId),
         'target-chain': Cl.stringAscii(req.targetChain),
-        'target-address': Cl.stringAscii(req.targetAddress)
-      })
+        'target-address': Cl.stringAscii(req.targetAddress),
+      }),
     );
 
     return simnet.callPublicFn(
       this.CONTRACT_NAME,
       'batch-initiate-bridge-requests',
       [Cl.list(clarityRequests)],
-      caller
+      caller,
     );
   }
 
+  // -------------------------------------------------------------------------
+  // Assertion helpers
+  // -------------------------------------------------------------------------
+
   /**
-   * Verify request has expected properties
+   * Verify that a bridge request tuple has the expected field values.
    */
   static verifyRequestProperties(
     requestData: any,
@@ -295,8 +281,8 @@ export class BridgeTestUtils {
     expectedChain: string,
     expectedAddress: string,
     expectedOwner: string,
-    expectedStatus: string = 'pending'
-  ) {
+    expectedStatus = 'pending',
+  ): void {
     expect(requestData['token-id']).toStrictEqual(Cl.uint(expectedTokenId));
     expect(requestData['target-chain']).toStrictEqual(Cl.stringAscii(expectedChain));
     expect(requestData['target-address']).toStrictEqual(Cl.stringAscii(expectedAddress));
@@ -305,23 +291,23 @@ export class BridgeTestUtils {
   }
 
   /**
-   * Calculate expected fee for a chain
+   * Return the expected bridge fee for a given chain name.
    */
   static calculateExpectedFee(chain: string): number {
-    return this.DEFAULT_CHAINS[chain as keyof typeof this.DEFAULT_CHAINS]?.fee || 0;
+    return this.DEFAULT_CHAINS[chain]?.fee ?? 0;
   }
 
-  /**
-   * Generate mock signature
-   */
+  // -------------------------------------------------------------------------
+  // Test data generators
+  // -------------------------------------------------------------------------
+
+  /** Generate a deterministic 65-byte mock validator signature */
   static generateMockSignature(): Uint8Array {
     return new Uint8Array(65).fill(0x42);
   }
 
-  /**
-   * Advance blocks for timeout testing
-   */
-  static advanceBlocks(blocks: number) {
+  /** Mine `blocks` empty Stacks blocks to simulate time passing */
+  static advanceBlocks(blocks: number): void {
     for (let i = 0; i < blocks; i++) {
       simnet.mineEmptyBlock();
     }
