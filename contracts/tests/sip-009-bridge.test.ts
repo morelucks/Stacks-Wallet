@@ -8,6 +8,8 @@
  *  - Administrative functions
  *  - Batch operations
  *  - 8 property-based tests
+ *
+ * Supported chains: ethereum, polygon, arbitrum, optimism
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
