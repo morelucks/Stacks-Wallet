@@ -50,9 +50,9 @@ export const reputationScoreGenerator = fc.integer({
 // ---------------------------------------------------------------------------
 
 export const ethereumAddressGenerator = fc.constant(CONFIG.TEST_ADDRESSES.ETHEREUM);
-export const bitcoinAddressGenerator = fc.constant(CONFIG.TEST_ADDRESSES.BITCOIN);
-export const polygonAddressGenerator = fc.constant(CONFIG.TEST_ADDRESSES.POLYGON);
-export const bscAddressGenerator = fc.constant(CONFIG.TEST_ADDRESSES.BSC);
+export const bitcoinAddressGenerator  = fc.constant(CONFIG.TEST_ADDRESSES.BITCOIN);
+export const polygonAddressGenerator  = fc.constant(CONFIG.TEST_ADDRESSES.POLYGON);
+export const bscAddressGenerator      = fc.constant(CONFIG.TEST_ADDRESSES.BSC);
 
 /** Generate one of the four test destination addresses */
 export const addressGenerator = fc.oneof(
@@ -78,39 +78,39 @@ export const signatureGenerator = fc.uint8Array({ minLength: 65, maxLength: 65 }
 
 /** Generate a complete bridge configuration record */
 export const bridgeConfigGenerator = fc.record({
-  chainId: chainIdGenerator,
-  enabled: fc.boolean(),
-  minAmount: fc.integer({ min: 1, max: CONFIG.MIN_BRIDGE_AMOUNT }),
-  maxAmount: fc.integer({ min: CONFIG.MIN_BRIDGE_AMOUNT, max: CONFIG.MAX_BRIDGE_AMOUNT }),
-  bridgeFee: bridgeFeeGenerator,
+  chainId:            chainIdGenerator,
+  enabled:            fc.boolean(),
+  minAmount:          fc.integer({ min: 1, max: CONFIG.MIN_BRIDGE_AMOUNT }),
+  maxAmount:          fc.integer({ min: CONFIG.MIN_BRIDGE_AMOUNT, max: CONFIG.MAX_BRIDGE_AMOUNT }),
+  bridgeFee:          bridgeFeeGenerator,
   confirmationBlocks: fc.integer({ min: 1, max: 100 }),
   validatorThreshold: fc.integer({ min: 1, max: CONFIG.MAX_VALIDATORS }),
 });
 
 /** Generate a validator record */
 export const validatorGenerator = fc.record({
-  chainId: chainIdGenerator,
-  stakeAmount: stakeAmountGenerator,
+  chainId:         chainIdGenerator,
+  stakeAmount:     stakeAmountGenerator,
   reputationScore: reputationScoreGenerator,
-  active: fc.boolean(),
+  active:          fc.boolean(),
 });
 
 /** Generate a complete bridge transaction record */
 export const bridgeTransactionGenerator = fc.record({
-  tokenId: tokenIdGenerator,
-  amount: amountGenerator,
-  destChain: chainIdGenerator,
+  tokenId:     tokenIdGenerator,
+  amount:      amountGenerator,
+  destChain:   chainIdGenerator,
   destAddress: addressGenerator,
-  txId: txIdGenerator,
+  txId:        txIdGenerator,
 });
 
 /** Generate a cross-chain transaction (source ≠ destination) */
 export const crossChainTransactionGenerator = fc
   .record({
     sourceChain: chainIdGenerator,
-    destChain: chainIdGenerator,
-    tokenId: tokenIdGenerator,
-    amount: amountGenerator,
+    destChain:   chainIdGenerator,
+    tokenId:     tokenIdGenerator,
+    amount:      amountGenerator,
   })
   .filter(tx => tx.sourceChain !== tx.destChain);
 
@@ -209,5 +209,5 @@ export const signatureSetGenerator = fc.array(signatureGenerator, {
 export const validatorSignatureGenerator = fc.record({
   validator: fc.string(),
   signature: signatureGenerator,
-  isValid: fc.boolean(),
+  isValid:   fc.boolean(),
 });
