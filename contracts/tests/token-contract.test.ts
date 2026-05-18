@@ -66,7 +66,7 @@ describe('Token Contract - Basic Operations', () => {
     expectEqual(result.value, Cl.ok(Cl.uint(6)));
   });
 
-  it('should get initial total supply', () => {
+  it('should get initial total supply of zero', () => {
     const result = simnet.callReadOnlyFn(
       'token-contract',
       'get-total-supply',
@@ -75,7 +75,6 @@ describe('Token Contract - Basic Operations', () => {
     );
 
     expect(result.isOk()).toBe(true);
-    // Initial supply should be 0
     expectEqual(result.value, Cl.ok(Cl.uint(0)));
   });
 
@@ -88,8 +87,8 @@ describe('Token Contract - Basic Operations', () => {
     );
 
     expect(result.isOk()).toBe(true);
-    // Should return some with default URI
-    expect(result.value.value.value).toBeDefined();
+    // URI is wrapped in Some
+    expect((result.value as any).value?.value).toBeDefined();
   });
 });
 
