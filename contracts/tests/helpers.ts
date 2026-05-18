@@ -1,34 +1,32 @@
 /**
  * Test Helpers and Utilities
- * Common functions for contract testing
+ * Common functions for Stacks Network contract testing via Clarinet SDK
+ *
+ * @module helpers
  */
 
 import { Cl } from '@stacks/transactions';
 
-/**
- * Create a principal from a string address
- */
+// ---------------------------------------------------------------------------
+// Clarity value constructors
+// ---------------------------------------------------------------------------
+
+/** Wrap a string address as a Clarity principal */
 export function principal(address: string) {
   return Cl.principal(address);
 }
 
-/**
- * Create a uint value
- */
+/** Wrap a number or bigint as a Clarity uint */
 export function uint(value: number | bigint) {
   return Cl.uint(value);
 }
 
-/**
- * Create a string value
- */
+/** Wrap a string as a Clarity UTF-8 string */
 export function str(value: string) {
   return Cl.stringUtf8(value);
 }
 
-/**
- * Create a buffer value
- */
+/** Wrap a string or Buffer as a Clarity buffer */
 export function buffer(value: string | Buffer) {
   if (typeof value === 'string') {
     return Cl.buffer(Buffer.from(value, 'utf-8'));
@@ -36,49 +34,52 @@ export function buffer(value: string | Buffer) {
   return Cl.buffer(value);
 }
 
-/**
- * Create an optional value
- */
-export function some(value: any) {
+/** Wrap a Clarity value in Some */
+export function some(value: unknown) {
   return Cl.some(value);
 }
 
-/**
- * Create a none value
- */
+/** Return a Clarity None value */
 export function none() {
   return Cl.none();
 }
 
+// ---------------------------------------------------------------------------
+// Result assertion helpers
+// ---------------------------------------------------------------------------
+
 /**
- * Assert that a result is ok
+ * Assert that a Clarity result is Ok and return its inner value.
+ * Throws a descriptive error on failure.
  */
-export function assertOk(result: any, message?: string) {
+export function assertOk(result: any, message?: string): any {
   if (!result.isOk()) {
-    throw new Error(message || `Expected Ok result, got: ${JSON.stringify(result)}`);
+    throw new Error(message ?? `Expected Ok result, got: ${JSON.stringify(result)}`);
   }
   return result.value;
 }
 
 /**
- * Assert that a result is error
+ * Assert that a Clarity result is Err.
+ * Optionally verify the numeric error code.
  */
-export function assertErr(result: any, expectedError?: number, message?: string) {
+export function assertErr(result: any, expectedError?: number, message?: string): any {
   if (!result.isErr()) {
-    throw new Error(message || `Expected Err result, got: ${JSON.stringify(result)}`);
+    throw new Error(message ?? `Expected Err result, got: ${JSON.stringify(result)}`);
   }
   if (expectedError !== undefined && result.value.value !== expectedError) {
     throw new Error(
-      message || `Expected error ${expectedError}, got: ${result.value.value}`
+      message ?? `Expected error ${expectedError}, got: ${result.value.value}`,
     );
   }
   return result.value;
 }
 
 /**
- * Get the value from a result
+ * Extract the inner value from an Ok result.
+ * Throws if the result is an Err.
  */
-export function getValue(result: any) {
+export function getValue(result: any): any {
   if (result.isOk()) {
     return result.value;
   }
@@ -86,42 +87,48 @@ export function getValue(result: any) {
 }
 
 /**
- * Compare two Clarity values
+ * Deep-equality check for Clarity values using JSON serialisation.
+ * Throws a descriptive error when values differ.
  */
-export function expectEqual(actual: any, expected: any, message?: string) {
+export function expectEqual(actual: unknown, expected: unknown, message?: string): void {
   const actualStr = JSON.stringify(actual);
   const expectedStr = JSON.stringify(expected);
-  
   if (actualStr !== expectedStr) {
-    throw new Error(
-      message || `Expected ${expectedStr}, got ${actualStr}`
-    );
+    throw new Error(message ?? `Expected ${expectedStr}, got ${actualStr}`);
   }
 }
 
+// ---------------------------------------------------------------------------
+// Token amount utilities
+// ---------------------------------------------------------------------------
+
 /**
- * Format token amount with decimals
+ * Convert a human-readable token amount to its on-chain micro-unit representation.
+ * Defaults to 6 decimal places (STX / SIP-010 standard).
  */
-export function formatTokenAmount(amount: number, decimals: number = 6): number {
+export function formatTokenAmount(amount: number, decimals = 6): number {
   return amount * Math.pow(10, decimals);
 }
 
 /**
- * Parse token amount with decimals
+ * Convert an on-chain micro-unit amount back to a human-readable value.
  */
-export function parseTokenAmount(amount: number, decimals: number = 6): number {
+export function parseTokenAmount(amount: number, decimals = 6): number {
   return amount / Math.pow(10, decimals);
 }
 
-/**
- * Sleep for a given number of milliseconds
- */
+// ---------------------------------------------------------------------------
+// Miscellaneous utilities
+// ---------------------------------------------------------------------------
+
+/** Async sleep helper (milliseconds) */
 export function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 /**
- * Generate a random principal address for testing
+ * Generate a syntactically valid but random Stacks testnet principal.
+ * Useful for property-based tests that need arbitrary addresses.
  */
 export function randomPrincipal(): string {
   const chars = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
@@ -132,9 +139,10 @@ export function randomPrincipal(): string {
   return result;
 }
 
-/**
- * Create test data for token operations
- */
+// ---------------------------------------------------------------------------
+// Token test data
+// ---------------------------------------------------------------------------
+
 export interface TestTokenData {
   name: string;
   symbol: string;
@@ -143,17 +151,19 @@ export interface TestTokenData {
   uri: string;
 }
 
+/** Default SIP-010 token metadata used across Stacks Network tests */
 export const DEFAULT_TOKEN_DATA: TestTokenData = {
   name: 'Test Token',
   symbol: 'TST',
   decimals: 6,
-  initialSupply: 1000000000,
-  uri: 'https://example.com/token-metadata.json'
+  initialSupply: 1_000_000_000,
+  uri: 'https://example.com/token-metadata.json',
 };
 
-/**
- * Create test data for wallet operations
- */
+// ---------------------------------------------------------------------------
+// Wallet test data
+// ---------------------------------------------------------------------------
+
 export interface TestWalletData {
   walletName: string;
   initialFunding: number;
@@ -161,19 +171,18 @@ export interface TestWalletData {
   memberFunding: number;
 }
 
+/** Default wallet configuration used across Stacks Network wallet tests */
 export const DEFAULT_WALLET_DATA: TestWalletData = {
   walletName: 'Test Wallet',
-  initialFunding: 1000000,
+  initialFunding: 1_000_000,
   memberName: 'Test Member',
-  memberFunding: 100000
+  memberFunding: 100_000,
 };
-/**
- * NFT-specific helper functions
- */
 
-/**
- * NFT test data interface
- */
+// ---------------------------------------------------------------------------
+// NFT helpers
+// ---------------------------------------------------------------------------
+
 export interface NFTTestData {
   tokenId: number;
   owner: string;
@@ -181,175 +190,122 @@ export interface NFTTestData {
   contractOwner: string;
 }
 
-/**
- * NFT error codes
- */
+/** Canonical NFT error codes matching the SIP-009 contract on Stacks Network */
 export const NFT_ERROR_CODES = {
   ERR_OWNER_ONLY: 100,
   ERR_NOT_TOKEN_OWNER: 101,
   ERR_TOKEN_EXISTS: 102,
-  ERR_TOKEN_NOT_FOUND: 103
+  ERR_TOKEN_NOT_FOUND: 103,
 } as const;
 
-/**
- * Create NFT test data with default values
- */
+/** Build an NFTTestData object with sensible defaults */
 export function createNFTTestData(overrides: Partial<NFTTestData> = {}): NFTTestData {
   return {
     tokenId: 1,
     owner: 'ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM',
     recipient: 'ST1SJ3DTE5DN7X54YDH5D64R3BCB6A2AG2ZQ8YPD5',
     contractOwner: 'ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM',
-    ...overrides
+    ...overrides,
   };
 }
 
 /**
- * Assert NFT ownership
+ * Assert that a specific token is owned by the expected principal.
+ * Uses the SIP-009 `get-owner` read-only function.
  */
 export function assertNFTOwnership(
   contractName: string,
   tokenId: number,
   expectedOwner: string,
-  caller: string = 'deployer'
-) {
-  const result = simnet.callReadOnlyFn(
-    contractName,
-    'get-owner',
-    [uint(tokenId)],
-    caller
-  );
-
+  caller = 'deployer',
+): void {
+  const result = simnet.callReadOnlyFn(contractName, 'get-owner', [uint(tokenId)], caller);
   if (!result.isOk()) {
     throw new Error(`Failed to get owner for token ${tokenId}: ${JSON.stringify(result)}`);
   }
-
   expectEqual(result.value, Cl.ok(some(principal(expectedOwner))));
 }
 
 /**
- * Assert NFT does not exist
+ * Assert that a token does not exist (owner returns None).
  */
 export function assertNFTNotExists(
   contractName: string,
   tokenId: number,
-  caller: string = 'deployer'
-) {
-  const result = simnet.callReadOnlyFn(
-    contractName,
-    'get-owner',
-    [uint(tokenId)],
-    caller
-  );
-
+  caller = 'deployer',
+): void {
+  const result = simnet.callReadOnlyFn(contractName, 'get-owner', [uint(tokenId)], caller);
   if (!result.isOk()) {
-    throw new Error(`Failed to check token existence for ${tokenId}: ${JSON.stringify(result)}`);
+    throw new Error(
+      `Failed to check token existence for ${tokenId}: ${JSON.stringify(result)}`,
+    );
   }
-
   expectEqual(result.value, Cl.ok(none()));
 }
 
-/**
- * Mint NFT helper
- */
-export function mintNFT(
-  contractName: string,
-  recipient: string,
-  minter: string = 'deployer'
-) {
-  return simnet.callPublicFn(
-    contractName,
-    'mint',
-    [principal(recipient)],
-    minter
-  );
+/** Mint a single NFT via the contract's `mint` function */
+export function mintNFT(contractName: string, recipient: string, minter = 'deployer') {
+  return simnet.callPublicFn(contractName, 'mint', [principal(recipient)], minter);
 }
 
-/**
- * Transfer NFT helper
- */
+/** Transfer an NFT via the contract's `transfer` function */
 export function transferNFT(
   contractName: string,
   tokenId: number,
   sender: string,
   recipient: string,
-  caller: string
+  caller: string,
 ) {
   return simnet.callPublicFn(
     contractName,
     'transfer',
     [uint(tokenId), principal(sender), principal(recipient)],
-    caller
+    caller,
   );
 }
 
-/**
- * Get last token ID helper
- */
-export function getLastTokenId(contractName: string, caller: string = 'deployer') {
-  return simnet.callReadOnlyFn(
-    contractName,
-    'get-last-token-id',
-    [],
-    caller
-  );
+/** Read the last minted token ID from the contract */
+export function getLastTokenId(contractName: string, caller = 'deployer') {
+  return simnet.callReadOnlyFn(contractName, 'get-last-token-id', [], caller);
 }
 
-/**
- * Validate NFT error code
- */
-export function assertNFTError(result: any, expectedErrorCode: number) {
+/** Assert that a result is an Err with the given NFT error code */
+export function assertNFTError(result: any, expectedErrorCode: number): void {
   if (!result.isErr()) {
     throw new Error(`Expected error result, got: ${JSON.stringify(result)}`);
   }
   expectEqual(result.value, Cl.error(uint(expectedErrorCode)));
 }
-/**
- * Additional NFT testing utilities
- */
+
+// ---------------------------------------------------------------------------
+// Batch NFT helpers
+// ---------------------------------------------------------------------------
 
 /**
- * Batch mint multiple tokens
+ * Mint multiple NFTs in sequence and return the assigned token IDs.
  */
 export function batchMintNFTs(
   contractName: string,
   recipients: string[],
-  minter: string = 'deployer'
+  minter = 'deployer',
 ): number[] {
-  const tokenIds: number[] = [];
-  
-  recipients.forEach((recipient, index) => {
-    const result = simnet.callPublicFn(
-      contractName,
-      'mint',
-      [principal(recipient)],
-      minter
-    );
-    
-    if (result.isOk()) {
-      tokenIds.push(index + 1);
-    }
-  });
-  
-  return tokenIds;
+  return recipients.reduce<number[]>((ids, recipient, index) => {
+    const result = simnet.callPublicFn(contractName, 'mint', [principal(recipient)], minter);
+    if (result.isOk()) ids.push(index + 1);
+    return ids;
+  }, []);
 }
 
 /**
- * Verify token ownership batch
+ * Verify ownership for a list of (tokenId, owner) pairs in a single pass.
  */
 export function verifyTokenOwnership(
   contractName: string,
   tokenOwnerPairs: Array<{ tokenId: number; owner: string }>,
-  caller: string = 'deployer'
-) {
-  tokenOwnerPairs.forEach(({ tokenId, owner }) => {
-    const result = simnet.callReadOnlyFn(
-      contractName,
-      'get-owner',
-      [uint(tokenId)],
-      caller
-    );
-    
+  caller = 'deployer',
+): void {
+  for (const { tokenId, owner } of tokenOwnerPairs) {
+    const result = simnet.callReadOnlyFn(contractName, 'get-owner', [uint(tokenId)], caller);
     expectEqual(result.value, Cl.ok(some(principal(owner))));
-  });
+  }
 }
