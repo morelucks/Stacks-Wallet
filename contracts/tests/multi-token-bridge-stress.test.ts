@@ -2,6 +2,12 @@
  * Multi-Token Bridge Stress Tests
  * Validates high-volume transaction processing and performance under load
  * for the multi-token bridge on Stacks Network.
+ *
+ * Stress scenarios:
+ *  - 100 sequential bridge transactions
+ *  - 20 transactions across all four chains
+ *  - 200 read-only getBridgeConfig calls
+ *  - 50 sequential configuration updates
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
