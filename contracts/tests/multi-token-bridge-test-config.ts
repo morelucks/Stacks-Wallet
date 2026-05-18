@@ -9,21 +9,23 @@ export const MULTI_TOKEN_BRIDGE_TEST_CONFIG = {
   // -------------------------------------------------------------------------
   // Timing and limits
   // -------------------------------------------------------------------------
-  /** Default request timeout in Stacks blocks (~1 day) */
+  /** Default request timeout in Stacks blocks (~1 day at 10-min block time) */
   DEFAULT_TIMEOUT: 144,
   /** Maximum number of validators per chain */
   MAX_VALIDATORS: 10,
   /** Minimum number of validators required */
   MIN_VALIDATORS: 1,
+  /** Default number of validator signatures required to confirm a transaction */
+  DEFAULT_SIGNATURE_THRESHOLD: 2,
 
   // -------------------------------------------------------------------------
   // Supported chain IDs
   // -------------------------------------------------------------------------
   TEST_CHAINS: {
     ETHEREUM: 1,
-    BITCOIN: 2,
-    POLYGON: 3,
-    BSC: 4,
+    BITCOIN:  2,
+    POLYGON:  3,
+    BSC:      4,
   },
 
   // -------------------------------------------------------------------------
@@ -50,37 +52,37 @@ export const MULTI_TOKEN_BRIDGE_TEST_CONFIG = {
   // Validator reputation settings
   // -------------------------------------------------------------------------
   DEFAULT_REPUTATION: 100,
-  MIN_REPUTATION: 0,
-  MAX_REPUTATION: 100,
+  MIN_REPUTATION:       0,
+  MAX_REPUTATION:     100,
 
   // -------------------------------------------------------------------------
   // Test destination addresses
   // -------------------------------------------------------------------------
   TEST_ADDRESSES: {
     ETHEREUM: '0x1234567890123456789012345678901234567890',
-    BITCOIN: 'bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh',
-    POLYGON: '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd',
-    BSC: '0x9876543210987654321098765432109876543210',
+    BITCOIN:  'bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh',
+    POLYGON:  '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd',
+    BSC:      '0x9876543210987654321098765432109876543210',
   },
 
   // -------------------------------------------------------------------------
   // Error codes (must match multi-token-bridge.clar)
   // -------------------------------------------------------------------------
   ERRORS: {
-    UNAUTHORIZED: 401,
-    NOT_FOUND: 404,
-    INVALID_PARAMETER: 400,
+    UNAUTHORIZED:        401,
+    NOT_FOUND:           404,
+    INVALID_PARAMETER:   400,
     INSUFFICIENT_BALANCE: 402,
-    BRIDGE_PAUSED: 403,
-    INVALID_CHAIN: 405,
-    INVALID_SIGNATURE: 406,
+    BRIDGE_PAUSED:       403,
+    INVALID_CHAIN:       405,
+    INVALID_SIGNATURE:   406,
   },
 
   // -------------------------------------------------------------------------
   // Property-based test settings
   // -------------------------------------------------------------------------
   PROPERTY_TEST_RUNS: 100,
-  SHRINK_ATTEMPTS: 1_000,
+  SHRINK_ATTEMPTS:  1_000,
 } as const;
 
 export type MultiTokenChainId =
