@@ -3,6 +3,9 @@
  * Validates signature collection, threshold checking, validator reputation
  * updates, and cross-chain signature independence for the multi-token bridge
  * on Stacks Network.
+ *
+ * Signature threshold: 2 validators required to confirm a transaction
+ * (configurable per chain via configure-bridge).
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
