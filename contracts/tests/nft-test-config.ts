@@ -61,6 +61,14 @@ export const NFT_TEST_CONFIG = {
     /** Additional test user */
     user4: 'wallet_4',
   },
+
+  // -------------------------------------------------------------------------
+  // Token URI settings
+  // -------------------------------------------------------------------------
+  /** Base URI used for test token metadata */
+  baseUri: 'https://example.com/nft/',
+  /** Default token URI returned by the contract (none in basic implementation) */
+  defaultTokenUri: null,
 } as const;
 
 export type NFTErrorCode = (typeof NFT_TEST_CONFIG.errorCodes)[keyof typeof NFT_TEST_CONFIG.errorCodes];
