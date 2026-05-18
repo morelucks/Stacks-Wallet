@@ -62,23 +62,23 @@ export const reputationGenerator = fc.integer({ min: 0, max: 1_000 });
 
 /** Generate a complete bridge request parameter set */
 export const bridgeRequestGenerator = fc.record({
-  tokenId: tokenIdGenerator,
-  targetChain: targetChainGenerator,
+  tokenId:       tokenIdGenerator,
+  targetChain:   targetChainGenerator,
   targetAddress: ethereumAddressGenerator,
 });
 
 /** Generate a chain configuration tuple */
 export const chainConfigGenerator = fc.record({
-  active: fc.boolean(),
-  minConfirmations: fc.integer({ min: 1, max: 50 }),
-  bridgeFee: fc.integer({ min: 100_000, max: 2_000_000 }),
+  active:             fc.boolean(),
+  minConfirmations:   fc.integer({ min: 1, max: 50 }),
+  bridgeFee:          fc.integer({ min: 100_000, max: 2_000_000 }),
   supportedStandards: fc.constant(['ERC721', 'ERC1155']),
 });
 
 /** Generate a user discount configuration */
 export const discountGenerator = fc.record({
   discountPercentage: fc.integer({ min: 1, max: 75 }),
-  validBlocks: fc.integer({ min: 1, max: 1_000 }),
+  validBlocks:        fc.integer({ min: 1, max: 1_000 }),
 });
 
 /** Generate a batch of 1 – 10 bridge requests */
@@ -119,7 +119,7 @@ export const concurrentOperationGenerator = fc.array(
   fc.record({
     operation: fc.constantFrom('initiate', 'validate', 'cancel', 'complete'),
     requestId: fc.integer({ min: 1, max: 100 }),
-    delay: fc.integer({ min: 0, max: 10 }),
+    delay:     fc.integer({ min: 0, max: 10 }),
   }),
   { minLength: 2, maxLength: 10 },
 );
@@ -130,9 +130,9 @@ export const concurrentOperationGenerator = fc.array(
 
 /** Convenience helpers for converting generated values to Clarity types */
 export const toClarityValue = {
-  uint: (n: number) => Cl.uint(n),
-  stringAscii: (s: string) => Cl.stringAscii(s),
-  buffer: (b: Uint8Array) => Cl.buffer(b),
-  bool: (b: boolean) => Cl.bool(b),
-  principal: (p: string) => Cl.principal(p),
+  uint:        (n: number)    => Cl.uint(n),
+  stringAscii: (s: string)    => Cl.stringAscii(s),
+  buffer:      (b: Uint8Array) => Cl.buffer(b),
+  bool:        (b: boolean)   => Cl.bool(b),
+  principal:   (p: string)    => Cl.principal(p),
 } as const;
