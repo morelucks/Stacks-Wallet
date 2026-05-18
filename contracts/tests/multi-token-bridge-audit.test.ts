@@ -1,60 +1,122 @@
-import { describe, it, expect } from 'vitest';
-import { MultiTokenBridgeTestUtils } from './multi-token-bridge-test-utils';
+/**
+ * Multi-Token Bridge Audit Tests
+ * Validates event emission, transaction history, and statistics tracking
+ * for the multi-token bridge on Stacks Network.
+ */
 
-const accounts = { deployer: 'ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM', wallet1: 'ST1SJ3DTE5DN7X54YDH5D64R3BCB6A2AG2ZQ8YPD5', wallet2: 'ST2CY5V39NHDPWSXMW9QDT3HC3GD6Q6XX4CFRK9AG' };
+import { describe, it, expect, beforeEach } from 'vitest';
+import { MultiTokenBridgeTestUtils } from './multi-token-bridge-test-utils';
+import { MULTI_TOKEN_BRIDGE_TEST_CONFIG as CFG } from './multi-token-bridge-test-config';
+
+// ---------------------------------------------------------------------------
+// Test account setup
+// ---------------------------------------------------------------------------
+const accounts = simnet.getAccounts();
+const deployer = accounts.get('deployer')!;
+const wallet1 = accounts.get('wallet_1')!;
+const wallet2 = accounts.get('wallet_2')!;
+
+// ---------------------------------------------------------------------------
+// Test suite
+// ---------------------------------------------------------------------------
 
 describe('Multi-Token Bridge Audit Tests', () => {
-  it('should emit events for all state changes', () => {
-    const configResult = MultiTokenBridgeTestUtils.configureBridge(1, true, 1000, 100000, 100, 10, 2, accounts.deployer);
-    expect(configResult.events).toHaveLength(1);
-    
-    const validatorResult = MultiTokenBridgeTestUtils.addValidator(1, accounts.wallet2, 5000, accounts.deployer);
-    expect(validatorResult.events).toHaveLength(1);
-    
-    MultiTokenBridgeTestUtils.setupDefaultBridgeConfig(accounts.deployer);
-    const bridgeResult = MultiTokenBridgeTestUtils.bridgeTokens(1, 10000, 1, 'addr', MultiTokenBridgeTestUtils.generateTxId(), accounts.wallet1);
-    expect(bridgeResult.events).toHaveLength(1);
+  beforeEach(() => {
+    MultiTokenBridgeTestUtils.setupDefaultBridgeConfig(deployer);
+    MultiTokenBridgeTestUtils.setupValidators([wallet2], deployer);
   });
 
-  it('should maintain transaction history', () => {
-    MultiTokenBridgeTestUtils.setupDefaultBridgeConfig(accounts.deployer);
-    
-    const txId1 = MultiTokenBridgeTestUtils.generateTxId();
-    const txId2 = MultiTokenBridgeTestUtils.generateTxId();
-    
-    MultiTokenBridgeTestUtils.bridgeTokens(1, 10000, 1, 'addr1', txId1, accounts.wallet1);
-    MultiTokenBridgeTestUtils.bridgeTokens(2, 20000, 1, 'addr2', txId2, accounts.wallet1);
-    
-    const tx1 = MultiTokenBridgeTestUtils.getBridgeTransaction(txId1);
-    const tx2 = MultiTokenBridgeTestUtils.getBridgeTransaction(txId2);
-    
-    expect(tx1.result.value).toBeSome();
-    expect(tx2.result.value).toBeSome();
+  // -------------------------------------------------------------------------
+  // Event emission
+  // -------------------------------------------------------------------------
+
+  describe('Event emission', () => {
+    it('should emit a print event on bridge configuration', () => {
+      const result = MultiTokenBridgeTestUtils.configureBridge(
+        CFG.TEST_CHAINS.ETHEREUM, true, 1_000, 100_000, 100, 10, 2, deployer,
+      );
+      expect(result.events).toHaveLength(1);
+      expect(result.events[0].event).toBe('print');
+    });
+
+    it('should emit a print event on validator addition', () => {
+      const result = MultiTokenBridgeTestUtils.addValidator(
+        CFG.TEST_CHAINS.ETHEREUM, wallet2, 5_000, deployer,
+      );
+      expect(result.events).toHaveLength(1);
+      expect(result.events[0].event).toBe('print');
+    });
+
+    it('should emit a print event on bridge-tokens', () => {
+      const result = MultiTokenBridgeTestUtils.bridgeTokens(
+        1, 10_000, CFG.TEST_CHAINS.ETHEREUM, CFG.TEST_ADDRESSES.ETHEREUM,
+        MultiTokenBridgeTestUtils.generateTxId(), wallet1,
+      );
+      expect(result.events).toHaveLength(1);
+      expect(result.events[0].event).toBe('print');
+    });
   });
 
-  it('should track bridge statistics', () => {
-    MultiTokenBridgeTestUtils.setupDefaultBridgeConfig(accounts.deployer);
-    MultiTokenBridgeTestUtils.bridgeTokens(1, 10000, 1, 'addr', MultiTokenBridgeTestUtils.generateTxId(), accounts.wallet1);
-    
-    const stats = MultiTokenBridgeTestUtils.getBridgeStats(1);
-    expect(stats.result.value).toBeSome();
-    expect(stats.result.value.value['total-transactions']).toBeUint(1);
+  // -------------------------------------------------------------------------
+  // Transaction history
+  // -------------------------------------------------------------------------
+
+  describe('Transaction history', () => {
+    it('should retain history for multiple transactions', () => {
+      const txId1 = MultiTokenBridgeTestUtils.generateTxId();
+      const txId2 = MultiTokenBridgeTestUtils.generateTxId();
+
+      MultiTokenBridgeTestUtils.bridgeTokens(
+        1, 10_000, CFG.TEST_CHAINS.ETHEREUM, CFG.TEST_ADDRESSES.ETHEREUM, txId1, wallet1,
+      );
+      MultiTokenBridgeTestUtils.bridgeTokens(
+        2, 20_000, CFG.TEST_CHAINS.POLYGON, CFG.TEST_ADDRESSES.POLYGON, txId2, wallet1,
+      );
+
+      expect(MultiTokenBridgeTestUtils.getBridgeTransaction(txId1).result).toBeSome();
+      expect(MultiTokenBridgeTestUtils.getBridgeTransaction(txId2).result).toBeSome();
+    });
   });
 
-  it('should provide complete audit trail', () => {
-    MultiTokenBridgeTestUtils.setupDefaultBridgeConfig(accounts.deployer);
-    MultiTokenBridgeTestUtils.setupValidators([accounts.wallet2], accounts.deployer);
-    
-    const txId = MultiTokenBridgeTestUtils.generateTxId();
-    MultiTokenBridgeTestUtils.bridgeTokens(1, 10000, 1, 'addr', txId, accounts.wallet1);
-    MultiTokenBridgeTestUtils.validateBridgeTransaction(txId, MultiTokenBridgeTestUtils.generateSignature(), true, accounts.wallet2);
-    
-    const tx = MultiTokenBridgeTestUtils.getBridgeTransaction(txId);
-    const validator = MultiTokenBridgeTestUtils.getValidatorInfo(1, accounts.wallet2);
-    const stats = MultiTokenBridgeTestUtils.getBridgeStats(1);
-    
-    expect(tx.result.value).toBeSome();
-    expect(validator.result.value).toBeSome();
-    expect(stats.result.value).toBeSome();
+  // -------------------------------------------------------------------------
+  // Statistics tracking
+  // -------------------------------------------------------------------------
+
+  describe('Statistics tracking', () => {
+    it('should increment total-transactions after a bridge call', () => {
+      MultiTokenBridgeTestUtils.bridgeTokens(
+        1, 10_000, CFG.TEST_CHAINS.ETHEREUM, CFG.TEST_ADDRESSES.ETHEREUM,
+        MultiTokenBridgeTestUtils.generateTxId(), wallet1,
+      );
+
+      const stats = MultiTokenBridgeTestUtils.getBridgeStats(CFG.TEST_CHAINS.ETHEREUM);
+      expect(stats.result).toBeSome();
+      expect((stats.result as any).value?.value?.['total-transactions']).toBeUint(1);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Complete audit trail
+  // -------------------------------------------------------------------------
+
+  describe('Complete audit trail', () => {
+    it('should provide a full audit trail after a bridge workflow', () => {
+      const txId = MultiTokenBridgeTestUtils.generateTxId();
+
+      MultiTokenBridgeTestUtils.bridgeTokens(
+        1, 10_000, CFG.TEST_CHAINS.ETHEREUM, CFG.TEST_ADDRESSES.ETHEREUM, txId, wallet1,
+      );
+      MultiTokenBridgeTestUtils.validateBridgeTransaction(
+        txId, MultiTokenBridgeTestUtils.generateSignature(), true, wallet2,
+      );
+
+      const tx = MultiTokenBridgeTestUtils.getBridgeTransaction(txId);
+      const validator = MultiTokenBridgeTestUtils.getValidatorInfo(CFG.TEST_CHAINS.ETHEREUM, wallet2);
+      const stats = MultiTokenBridgeTestUtils.getBridgeStats(CFG.TEST_CHAINS.ETHEREUM);
+
+      expect(tx.result).toBeSome();
+      expect(validator.result).toBeSome();
+      expect(stats.result).toBeSome();
+    });
   });
 });
