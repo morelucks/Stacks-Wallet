@@ -219,3 +219,23 @@ export function batchTransfer(
     }
   }
 }
+
+// ---------------------------------------------------------------------------
+// State snapshot comparison helper
+// ---------------------------------------------------------------------------
+
+/**
+ * Capture state before and after a callback, then return both snapshots.
+ * Useful for verifying that an operation changes state as expected.
+ */
+export async function captureStateDelta(
+  contractName: string,
+  operation: () => void | Promise<void>,
+  maxTokenId = 100,
+  caller = 'deployer',
+): Promise<{ before: NFTContractState; after: NFTContractState }> {
+  const before = captureContractState(contractName, maxTokenId, caller);
+  await operation();
+  const after = captureContractState(contractName, maxTokenId, caller);
+  return { before, after };
+}
