@@ -89,6 +89,21 @@ describe('NFT Contract - Minting Operations', () => {
     expectEqual(ownerResult.value, Cl.ok(some(principal(user1))));
   });
 });
+
+describe('NFT Contract - Minting Operations Extended', () => {
+  let deployer: string;
+  let user1: string;
+  let user2: string;
+  let user3: string;
+
+  beforeEach(() => {
+    const accounts = simnet.getAccounts();
+    deployer = accounts.get('deployer')!;
+    user1 = accounts.get('wallet_1')!;
+    user2 = accounts.get('wallet_2')!;
+    user3 = accounts.get('wallet_3')!;
+  });
+
   it('should mint multiple tokens to same recipient', () => {
     // Mint first token
     const result1 = simnet.callPublicFn(
@@ -207,6 +222,8 @@ describe('NFT Contract - Minting Operations', () => {
       expectEqual(owner.value, Cl.ok(some(principal(recipient))));
     }
   });
+});
+
 describe('NFT Contract - Minting Access Control', () => {
   let deployer: string;
   let user1: string;
@@ -398,6 +415,8 @@ describe('NFT Contract - Transfer Operations', () => {
 
     expectEqual(newOwner.value, Cl.ok(some(principal(user2))));
   });
+});
+
 describe('NFT Contract - Transfer Access Control', () => {
   let deployer: string;
   let user1: string;
@@ -550,6 +569,8 @@ describe('NFT Contract - Ownership Queries', () => {
     expectEqual(owner2.value, Cl.ok(some(principal(user2))));
     expectEqual(owner3.value, Cl.ok(some(principal(deployer))));
   });
+});
+
 describe('NFT Contract - Token ID Tracking', () => {
   let deployer: string;
   let user1: string;
@@ -650,6 +671,8 @@ describe('NFT Contract - Token URI', () => {
     expect(result.isOk()).toBe(true);
     expectEqual(result.value, Cl.ok(none()));
   });
+});
+
 describe('NFT Contract - Error Handling', () => {
   let deployer: string;
   let user1: string;
@@ -1024,6 +1047,8 @@ describe('NFT Contract - Additional Minting Tests', () => {
     const owner = simnet.callReadOnlyFn('nft-contract', 'get-owner', [uint(1)], deployer);
     expectEqual(owner.value, Cl.ok(some(principal(deployer))));
   });
+});
+
 describe('NFT Contract - Transfer Edge Cases', () => {
   let deployer: string;
   let user1: string;
@@ -1149,6 +1174,8 @@ describe('NFT Contract - State Validation', () => {
     expectEqual(owner1.value, Cl.ok(some(principal(user1))));
     expectEqual(owner2.value, Cl.ok(none()));
   });
+});
+
 describe('NFT Contract - Advanced Scenarios', () => {
   let deployer: string;
   let user1: string;
