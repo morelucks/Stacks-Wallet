@@ -1,181 +1,230 @@
+/**
+ * Multi-Token Bridge Error Handling Tests
+ * Validates that the multi-token bridge on Stacks Network returns the correct
+ * error codes for all invalid-input, access-control, and state-validation scenarios.
+ */
+
 import { describe, it, expect, beforeEach } from 'vitest';
-import { Simnet } from '@hirosystems/clarinet-sdk';
 import { Cl } from '@stacks/transactions';
 import { MultiTokenBridgeTestUtils } from './multi-token-bridge-test-utils';
-import { MULTI_TOKEN_BRIDGE_TEST_CONFIG } from './multi-token-bridge-test-config';
+import { MULTI_TOKEN_BRIDGE_TEST_CONFIG as CFG } from './multi-token-bridge-test-config';
 
-const simnet = new Simnet();
+// ---------------------------------------------------------------------------
+// Test account setup
+// ---------------------------------------------------------------------------
 const accounts = simnet.getAccounts();
 const deployer = accounts.get('deployer')!;
 const wallet1 = accounts.get('wallet_1')!;
 const wallet2 = accounts.get('wallet_2')!;
 
+// ---------------------------------------------------------------------------
+// Test suite
+// ---------------------------------------------------------------------------
+
 describe('Multi-Token Bridge Error Handling Tests', () => {
   beforeEach(() => {
-    simnet.reset();
     MultiTokenBridgeTestUtils.setupDefaultBridgeConfig(deployer);
     MultiTokenBridgeTestUtils.setupValidators([wallet2], deployer);
   });
 
-  describe('Authorization errors', () => {
-    it('should reject unauthorized bridge configuration', () => {
+  // -------------------------------------------------------------------------
+  // Authorisation errors
+  // -------------------------------------------------------------------------
+
+  describe('Authorisation errors', () => {
+    it('should return UNAUTHORIZED for non-owner bridge configuration', () => {
       const result = MultiTokenBridgeTestUtils.configureBridge(
-        MULTI_TOKEN_BRIDGE_TEST_CONFIG.TEST_CHAINS.ETHEREUM,
-        true, 1000, 100000, 100, 10, 2,
-        wallet1 // Not deployer
+        CFG.TEST_CHAINS.ETHEREUM, true, 1_000, 100_000, 100, 10, 2, wallet1,
       );
-      expect(result.result).toBeErr(Cl.uint(MultiTokenBridgeTestUtils.ERRORS.UNAUTHORIZED));
+      expect(result.result).toBeErr(Cl.uint(CFG.ERRORS.UNAUTHORIZED));
     });
 
-    it('should reject unauthorized validator addition', () => {
+    it('should return UNAUTHORIZED for non-owner validator addition', () => {
       const result = MultiTokenBridgeTestUtils.addValidator(
-        MULTI_TOKEN_BRIDGE_TEST_CONFIG.TEST_CHAINS.ETHEREUM,
-        wallet1, 5000, wallet1 // Not deployer
+        CFG.TEST_CHAINS.ETHEREUM, wallet1, 5_000, wallet1,
       );
-      expect(result.result).toBeErr(Cl.uint(MultiTokenBridgeTestUtils.ERRORS.UNAUTHORIZED));
+      expect(result.result).toBeErr(Cl.uint(CFG.ERRORS.UNAUTHORIZED));
     });
 
-    it('should reject validation from non-validator', () => {
+    it('should return UNAUTHORIZED when a non-validator submits a signature', () => {
       const txId = MultiTokenBridgeTestUtils.generateTxId();
-      MultiTokenBridgeTestUtils.bridgeTokens(1, 10000, 1, 'addr', txId, wallet1);
-      
-      const result = MultiTokenBridgeTestUtils.validateBridgeTransaction(
-        txId, MultiTokenBridgeTestUtils.generateSignature(), true, wallet1
+      MultiTokenBridgeTestUtils.bridgeTokens(
+        1, 10_000, CFG.TEST_CHAINS.ETHEREUM, CFG.TEST_ADDRESSES.ETHEREUM, txId, wallet1,
       );
-      expect(result.result).toBeErr(Cl.uint(MultiTokenBridgeTestUtils.ERRORS.UNAUTHORIZED));
+
+      const result = MultiTokenBridgeTestUtils.validateBridgeTransaction(
+        txId, MultiTokenBridgeTestUtils.generateSignature(), true, wallet1,
+      );
+      expect(result.result).toBeErr(Cl.uint(CFG.ERRORS.UNAUTHORIZED));
+    });
+
+    it('should return consistent UNAUTHORIZED codes across all admin functions', () => {
+      const results = [
+        MultiTokenBridgeTestUtils.configureBridge(
+          CFG.TEST_CHAINS.ETHEREUM, true, 1_000, 100_000, 100, 10, 2, wallet1,
+        ),
+        MultiTokenBridgeTestUtils.addValidator(
+          CFG.TEST_CHAINS.ETHEREUM, wallet1, 5_000, wallet1,
+        ),
+      ];
+
+      for (const result of results) {
+        expect(result.result).toBeErr(Cl.uint(CFG.ERRORS.UNAUTHORIZED));
+      }
     });
   });
+
+  // -------------------------------------------------------------------------
+  // Invalid parameter errors
+  // -------------------------------------------------------------------------
 
   describe('Invalid parameter errors', () => {
-    it('should reject invalid bridge configuration parameters', () => {
+    it('should return INVALID_PARAMETER when max-amount < min-amount', () => {
       const result = MultiTokenBridgeTestUtils.configureBridge(
-        1, true, 1000, 500, 100, 10, 2, deployer // max < min
+        CFG.TEST_CHAINS.ETHEREUM, true, 1_000, 500, 100, 10, 2, deployer,
       );
-      expect(result.result).toBeErr(Cl.uint(MultiTokenBridgeTestUtils.ERRORS.INVALID_PARAMETER));
+      expect(result.result).toBeErr(Cl.uint(CFG.ERRORS.INVALID_PARAMETER));
     });
 
-    it('should reject excessive bridge fees', () => {
+    it('should return INVALID_PARAMETER for a fee above 10 %', () => {
       const result = MultiTokenBridgeTestUtils.configureBridge(
-        1, true, 1000, 100000, 1500, 10, 2, deployer // 15% fee
+        CFG.TEST_CHAINS.ETHEREUM, true, 1_000, 100_000, 1_500, 10, 2, deployer,
       );
-      expect(result.result).toBeErr(Cl.uint(MultiTokenBridgeTestUtils.ERRORS.INVALID_PARAMETER));
+      expect(result.result).toBeErr(Cl.uint(CFG.ERRORS.INVALID_PARAMETER));
     });
 
-    it('should reject zero stake amount for validators', () => {
-      const result = MultiTokenBridgeTestUtils.addValidator(1, wallet1, 0, deployer);
-      expect(result.result).toBeErr(Cl.uint(MultiTokenBridgeTestUtils.ERRORS.INVALID_PARAMETER));
+    it('should return INVALID_PARAMETER for a zero validator stake', () => {
+      const result = MultiTokenBridgeTestUtils.addValidator(
+        CFG.TEST_CHAINS.ETHEREUM, wallet1, 0, deployer,
+      );
+      expect(result.result).toBeErr(Cl.uint(CFG.ERRORS.INVALID_PARAMETER));
     });
 
-    it('should reject bridge amounts below minimum', () => {
+    it('should return INVALID_PARAMETER for an amount below the chain minimum', () => {
       const result = MultiTokenBridgeTestUtils.bridgeTokens(
-        1, 500, 1, 'addr', MultiTokenBridgeTestUtils.generateTxId(), wallet1
+        1, 500, CFG.TEST_CHAINS.ETHEREUM, CFG.TEST_ADDRESSES.ETHEREUM,
+        MultiTokenBridgeTestUtils.generateTxId(), wallet1,
       );
-      expect(result.result).toBeErr(Cl.uint(MultiTokenBridgeTestUtils.ERRORS.INVALID_PARAMETER));
+      expect(result.result).toBeErr(Cl.uint(CFG.ERRORS.INVALID_PARAMETER));
     });
 
-    it('should reject bridge amounts above maximum', () => {
+    it('should return INVALID_PARAMETER for an amount above the chain maximum', () => {
       const result = MultiTokenBridgeTestUtils.bridgeTokens(
-        1, 2000000, 1, 'addr', MultiTokenBridgeTestUtils.generateTxId(), wallet1
+        1, 2_000_000, CFG.TEST_CHAINS.ETHEREUM, CFG.TEST_ADDRESSES.ETHEREUM,
+        MultiTokenBridgeTestUtils.generateTxId(), wallet1,
       );
-      expect(result.result).toBeErr(Cl.uint(MultiTokenBridgeTestUtils.ERRORS.INVALID_PARAMETER));
+      expect(result.result).toBeErr(Cl.uint(CFG.ERRORS.INVALID_PARAMETER));
     });
 
-    it('should reject empty destination address', () => {
+    it('should return INVALID_PARAMETER for an empty destination address', () => {
       const result = MultiTokenBridgeTestUtils.bridgeTokens(
-        1, 10000, 1, '', MultiTokenBridgeTestUtils.generateTxId(), wallet1
+        1, 10_000, CFG.TEST_CHAINS.ETHEREUM, '',
+        MultiTokenBridgeTestUtils.generateTxId(), wallet1,
       );
-      expect(result.result).toBeErr(Cl.uint(MultiTokenBridgeTestUtils.ERRORS.INVALID_PARAMETER));
+      expect(result.result).toBeErr(Cl.uint(CFG.ERRORS.INVALID_PARAMETER));
     });
   });
+
+  // -------------------------------------------------------------------------
+  // Invalid chain errors
+  // -------------------------------------------------------------------------
 
   describe('Invalid chain errors', () => {
-    it('should reject bridge to unconfigured chain', () => {
+    it('should return INVALID_CHAIN for an unconfigured chain ID', () => {
       const result = MultiTokenBridgeTestUtils.bridgeTokens(
-        1, 10000, 999, 'addr', MultiTokenBridgeTestUtils.generateTxId(), wallet1
+        1, 10_000, 999, CFG.TEST_ADDRESSES.ETHEREUM,
+        MultiTokenBridgeTestUtils.generateTxId(), wallet1,
       );
-      expect(result.result).toBeErr(Cl.uint(MultiTokenBridgeTestUtils.ERRORS.INVALID_CHAIN));
+      expect(result.result).toBeErr(Cl.uint(CFG.ERRORS.INVALID_CHAIN));
     });
 
-    it('should reject bridge to disabled chain', () => {
-      MultiTokenBridgeTestUtils.configureBridge(2, false, 1000, 100000, 100, 10, 2, deployer);
-      const result = MultiTokenBridgeTestUtils.bridgeTokens(
-        1, 10000, 2, 'addr', MultiTokenBridgeTestUtils.generateTxId(), wallet1
+    it('should return INVALID_CHAIN for a disabled chain', () => {
+      MultiTokenBridgeTestUtils.configureBridge(
+        CFG.TEST_CHAINS.BITCOIN, false, 1_000, 100_000, 100, 10, 2, deployer,
       );
-      expect(result.result).toBeErr(Cl.uint(MultiTokenBridgeTestUtils.ERRORS.INVALID_CHAIN));
+      const result = MultiTokenBridgeTestUtils.bridgeTokens(
+        1, 10_000, CFG.TEST_CHAINS.BITCOIN, CFG.TEST_ADDRESSES.BITCOIN,
+        MultiTokenBridgeTestUtils.generateTxId(), wallet1,
+      );
+      expect(result.result).toBeErr(Cl.uint(CFG.ERRORS.INVALID_CHAIN));
     });
 
-    it('should reject fee calculation for invalid chain', () => {
-      const result = MultiTokenBridgeTestUtils.calculateBridgeFee(1, 10000, 999);
-      expect(result.result).toBeErr(Cl.uint(MultiTokenBridgeTestUtils.ERRORS.INVALID_CHAIN));
+    it('should return INVALID_CHAIN for fee calculation on an invalid chain', () => {
+      const result = MultiTokenBridgeTestUtils.calculateBridgeFee(1, 10_000, 999);
+      expect(result.result).toBeErr(Cl.uint(CFG.ERRORS.INVALID_CHAIN));
     });
   });
 
+  // -------------------------------------------------------------------------
+  // Not found errors
+  // -------------------------------------------------------------------------
+
   describe('Not found errors', () => {
-    it('should reject validation of non-existent transaction', () => {
+    it('should return NOT_FOUND when validating a non-existent transaction', () => {
       const result = MultiTokenBridgeTestUtils.validateBridgeTransaction(
         MultiTokenBridgeTestUtils.generateTxId(),
         MultiTokenBridgeTestUtils.generateSignature(),
-        true, wallet2
+        true, wallet2,
       );
-      expect(result.result).toBeErr(Cl.uint(MultiTokenBridgeTestUtils.ERRORS.NOT_FOUND));
+      expect(result.result).toBeErr(Cl.uint(CFG.ERRORS.NOT_FOUND));
     });
 
-    it('should reject completion of non-existent transaction', () => {
+    it('should return NOT_FOUND when completing a non-existent transaction', () => {
       const result = MultiTokenBridgeTestUtils.completeBridgeTransaction(
-        MultiTokenBridgeTestUtils.generateTxId(), deployer
+        MultiTokenBridgeTestUtils.generateTxId(), deployer,
       );
-      expect(result.result).toBeErr(Cl.uint(MultiTokenBridgeTestUtils.ERRORS.NOT_FOUND));
+      expect(result.result).toBeErr(Cl.uint(CFG.ERRORS.NOT_FOUND));
     });
   });
+
+  // -------------------------------------------------------------------------
+  // State validation errors
+  // -------------------------------------------------------------------------
 
   describe('State validation errors', () => {
-    it('should reject validation of failed transaction', () => {
+    it('should return INVALID_PARAMETER when validating a failed transaction', () => {
       const txId = MultiTokenBridgeTestUtils.generateTxId();
-      MultiTokenBridgeTestUtils.bridgeTokens(1, 10000, 1, 'addr', txId, wallet1);
-      
-      // First validator rejects
+      MultiTokenBridgeTestUtils.bridgeTokens(
+        1, 10_000, CFG.TEST_CHAINS.ETHEREUM, CFG.TEST_ADDRESSES.ETHEREUM, txId, wallet1,
+      );
+
       MultiTokenBridgeTestUtils.validateBridgeTransaction(
-        txId, MultiTokenBridgeTestUtils.generateSignature(), false, wallet2
+        txId, MultiTokenBridgeTestUtils.generateSignature(), false, wallet2,
       );
-      
-      // Second validator tries to validate failed transaction
+
       const result = MultiTokenBridgeTestUtils.validateBridgeTransaction(
-        txId, MultiTokenBridgeTestUtils.generateSignature(), true, wallet2
+        txId, MultiTokenBridgeTestUtils.generateSignature(), true, wallet2,
       );
-      expect(result.result).toBeErr(Cl.uint(MultiTokenBridgeTestUtils.ERRORS.INVALID_PARAMETER));
+      expect(result.result).toBeErr(Cl.uint(CFG.ERRORS.INVALID_PARAMETER));
     });
 
-    it('should reject completion of non-confirmed transaction', () => {
+    it('should return INVALID_PARAMETER when completing a non-confirmed transaction', () => {
       const txId = MultiTokenBridgeTestUtils.generateTxId();
-      MultiTokenBridgeTestUtils.bridgeTokens(1, 10000, 1, 'addr', txId, wallet1);
-      
+      MultiTokenBridgeTestUtils.bridgeTokens(
+        1, 10_000, CFG.TEST_CHAINS.ETHEREUM, CFG.TEST_ADDRESSES.ETHEREUM, txId, wallet1,
+      );
+
       const result = MultiTokenBridgeTestUtils.completeBridgeTransaction(txId, deployer);
-      expect(result.result).toBeErr(Cl.uint(MultiTokenBridgeTestUtils.ERRORS.INVALID_PARAMETER));
+      expect(result.result).toBeErr(Cl.uint(CFG.ERRORS.INVALID_PARAMETER));
     });
   });
 
-  describe('Error code consistency', () => {
-    it('should return consistent error codes across functions', () => {
-      // Test that same error conditions return same error codes
-      const unauthorizedResults = [
-        MultiTokenBridgeTestUtils.configureBridge(1, true, 1000, 100000, 100, 10, 2, wallet1),
-        MultiTokenBridgeTestUtils.addValidator(1, wallet1, 5000, wallet1)
-      ];
-      
-      unauthorizedResults.forEach(result => {
-        expect(result.result).toBeErr(Cl.uint(MultiTokenBridgeTestUtils.ERRORS.UNAUTHORIZED));
-      });
-    });
+  // -------------------------------------------------------------------------
+  // Error state stability
+  // -------------------------------------------------------------------------
 
-    it('should maintain error state without corruption', () => {
-      // Trigger multiple errors and verify system remains stable
-      MultiTokenBridgeTestUtils.configureBridge(1, true, 1000, 500, 100, 10, 2, deployer); // Invalid
-      MultiTokenBridgeTestUtils.addValidator(1, wallet1, 0, deployer); // Invalid
-      MultiTokenBridgeTestUtils.bridgeTokens(1, 0, 999, '', MultiTokenBridgeTestUtils.generateTxId(), wallet1); // Multiple errors
-      
-      // System should still work normally
-      const validResult = MultiTokenBridgeTestUtils.getBridgeOverview();
-      expect(validResult.result).toBeOk();
+  describe('Error state stability', () => {
+    it('should remain stable after multiple consecutive errors', () => {
+      MultiTokenBridgeTestUtils.configureBridge(
+        CFG.TEST_CHAINS.ETHEREUM, true, 1_000, 500, 100, 10, 2, deployer,
+      );
+      MultiTokenBridgeTestUtils.addValidator(CFG.TEST_CHAINS.ETHEREUM, wallet1, 0, deployer);
+      MultiTokenBridgeTestUtils.bridgeTokens(
+        1, 0, 999, '', MultiTokenBridgeTestUtils.generateTxId(), wallet1,
+      );
+
+      const overview = MultiTokenBridgeTestUtils.getBridgeOverview();
+      expect(overview.result).toBeOk();
     });
   });
 });
