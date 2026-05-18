@@ -1,6 +1,6 @@
 /**
  * Token Contract Tests
- * Tests for SIP-010 compliant fungible token contract
+ * Tests for the SIP-010 compliant fungible token contract on Stacks Network.
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
@@ -13,12 +13,9 @@ import {
   buffer,
   some,
   none,
-  assertOk,
-  assertErr,
-  getValue,
   expectEqual,
   formatTokenAmount,
-  DEFAULT_TOKEN_DATA
+  DEFAULT_TOKEN_DATA,
 } from './helpers';
 
 describe('Token Contract - Basic Operations', () => {
@@ -217,32 +214,33 @@ describe('Token Contract - Minting', () => {
 
   it("owner can mint within max supply and balances update", () => {
     // mint 100 units to wallet1
-    const { result: mintResult } = simnet.callPublicFn(
+    const mintResult = simnet.callPublicFn(
       "token-contract",
       "mint",
-      [uintCV(100n), standardPrincipalCV(wallet1)],
+      [uint(100), principal(user1)],
       deployer,
     );
-    // ResponseOkCV<bool> -> result.type === "ok"
-    expect(mintResult.type).toBe("ok");
+    expect(mintResult.isOk()).toBe(true);
 
     // total supply should now be 100
-    const { result: supplyResult } = simnet.callReadOnlyFn(
+    const supplyResult = simnet.callReadOnlyFn(
       "token-contract",
       "get-total-supply",
       [],
       deployer,
     );
-    expect(supplyResult.value.value).toBe(100n);
+    expect(supplyResult.isOk()).toBe(true);
+    expectEqual(supplyResult.value, Cl.ok(Cl.uint(100)));
 
     // wallet1 balance should be 100
-    const { result: balanceResult } = simnet.callReadOnlyFn(
+    const balanceResult = simnet.callReadOnlyFn(
       "token-contract",
       "get-balance",
-      [standardPrincipalCV(wallet1)],
-      wallet1,
+      [principal(user1)],
+      user1,
     );
-    expect(balanceResult.value.value).toBe(100n);
+    expect(balanceResult.isOk()).toBe(true);
+    expectEqual(balanceResult.value, Cl.ok(Cl.uint(100)));
   });
 });
 
