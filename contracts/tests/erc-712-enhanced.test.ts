@@ -1,23 +1,17 @@
-import { describe, expect, it, beforeEach } from "vitest";
-import { Cl } from "@stacks/transactions";
+/**
+ * ERC-712 Enhanced Contract Tests
+ * Validates multi-algorithm signature verification, advanced replay protection,
+ * role-based access control, and performance optimisations for the enhanced
+ * ERC-712 implementation on Stacks Network.
+ */
+
+import { describe, expect, it, beforeEach } from 'vitest';
+import { Cl } from '@stacks/transactions';
 
 const accounts = simnet.getAccounts();
-const deployer = accounts.get("deployer")!;
-const alice = accounts.get("wallet_1")!;
-const bob = accounts.get("wallet_2")!;
-
-/*
-  Enhanced ERC-712 Contract Test Suite
-  
-  This test suite validates the enhanced ERC-712 implementation with:
-  - Multi-algorithm signature verification
-  - Advanced replay protection
-  - Hierarchical delegation
-  - Conditional meta-transactions
-  - Enhanced permit functionality
-  - Role-based access control
-  - Performance optimizations
-*/
+const deployer = accounts.get('deployer')!;
+const alice = accounts.get('wallet_1')!;
+const bob = accounts.get('wallet_2')!;
 
 describe("Enhanced ERC-712 Contract", () => {
   beforeEach(() => {
