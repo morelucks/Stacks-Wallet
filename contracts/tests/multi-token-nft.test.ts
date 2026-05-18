@@ -1,6 +1,11 @@
 /**
  * Multi-Token NFT Contract Tests
- * Tests for ERC1155-like multi-token contract
+ * Tests for the ERC-1155-like multi-token contract on Stacks Network.
+ *
+ * Error codes:
+ *  102 – ERR_UNAUTHORIZED
+ *  111 – ERR_INSUFFICIENT_BALANCE
+ *  121 – ERR_BATCH_SIZE_MISMATCH
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
@@ -13,10 +18,8 @@ import {
   buffer,
   some,
   none,
-  assertOk,
-  assertErr,
   expectEqual,
-  formatTokenAmount
+  formatTokenAmount,
 } from './helpers';
 
 describe('Multi-Token NFT - Token Creation', () => {
