@@ -1,89 +1,177 @@
+/**
+ * Multi-Token Bridge Property Tests
+ * Property-based tests verifying universal invariants for the multi-token
+ * bridge on Stacks Network.
+ *
+ * Properties tested:
+ *  1. Bridge configuration integrity
+ *  2. Transaction state consistency
+ *  3. Validator management integrity
+ *  4. Mathematical accuracy of fee calculations
+ */
+
 import { describe, it, expect } from 'vitest';
 import fc from 'fast-check';
 import { MultiTokenBridgeTestUtils } from './multi-token-bridge-test-utils';
-import { bridgeConfigGenerator, bridgeTransactionGenerator, validatorGenerator } from './multi-token-bridge-generators';
+import {
+  bridgeConfigGenerator,
+  bridgeTransactionGenerator,
+  validatorGenerator,
+} from './multi-token-bridge-generators';
+import { MULTI_TOKEN_BRIDGE_TEST_CONFIG as CFG } from './multi-token-bridge-test-config';
 
-const accounts = { deployer: 'ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM', wallet1: 'ST1SJ3DTE5DN7X54YDH5D64R3BCB6A2AG2ZQ8YPD5', wallet2: 'ST2CY5V39NHDPWSXMW9QDT3HC3GD6Q6XX4CFRK9AG' };
+// ---------------------------------------------------------------------------
+// Test account setup
+// ---------------------------------------------------------------------------
+const accounts = simnet.getAccounts();
+const deployer = accounts.get('deployer')!;
+const wallet1 = accounts.get('wallet_1')!;
+const wallet2 = accounts.get('wallet_2')!;
+
+// ---------------------------------------------------------------------------
+// Test suite
+// ---------------------------------------------------------------------------
 
 describe('Multi-Token Bridge Property Tests', () => {
+  // -------------------------------------------------------------------------
+  // Property 1: Bridge configuration integrity
+  // -------------------------------------------------------------------------
+
   describe('Property 1: Bridge Configuration Integrity', () => {
-    it('should maintain configuration integrity across all valid inputs', () => {
-      fc.assert(fc.property(bridgeConfigGenerator, (config) => {
-        if (config.maxAmount <= config.minAmount || config.bridgeFee > 1000) return true;
-        
-        const result = MultiTokenBridgeTestUtils.configureBridge(
-          config.chainId, config.enabled, config.minAmount, config.maxAmount,
-          config.bridgeFee, config.confirmationBlocks, config.validatorThreshold,
-          accounts.deployer
-        );
-        
-        if (result.result.type === 'ok') {
-          const retrieved = MultiTokenBridgeTestUtils.getBridgeConfig(config.chainId);
-          return retrieved.result.type === 'ok' && retrieved.result.value.type === 'some';
-        }
-        return true;
-      }), { numRuns: 100 });
-    });
-  });
+    it('should store every valid configuration and make it retrievable', () => {
+      fc.assert(
+        fc.property(bridgeConfigGenerator, config => {
+          // Skip invalid parameter combinations
+          if (config.maxAmount <= config.minAmount || config.bridgeFee > CFG.MAX_BRIDGE_FEE) {
+            return true;
+          }
 
-  describe('Property 2: Transaction State Consistency', () => {
-    it('should preserve transaction state consistency across all operations', () => {
-      fc.assert(fc.property(bridgeTransactionGenerator, (tx) => {
-        MultiTokenBridgeTestUtils.setupDefaultBridgeConfig(accounts.deployer);
-        
-        const result = MultiTokenBridgeTestUtils.bridgeTokens(
-          tx.tokenId, tx.amount, tx.destChain, tx.destAddress, tx.txId, accounts.wallet1
-        );
-        
-        if (result.result.type === 'ok') {
-          const retrieved = MultiTokenBridgeTestUtils.getBridgeTransaction(tx.txId);
-          return retrieved.result.type === 'ok' && 
-                 (retrieved.result.value.type === 'some' || retrieved.result.value.type === 'none');
-        }
-        return true;
-      }), { numRuns: 100 });
-    });
-  });
+          const result = MultiTokenBridgeTestUtils.configureBridge(
+            config.chainId,
+            config.enabled,
+            config.minAmount,
+            config.maxAmount,
+            config.bridgeFee,
+            config.confirmationBlocks,
+            config.validatorThreshold,
+            deployer,
+          );
 
-  describe('Property 3: Validator Management Integrity', () => {
-    it('should maintain validator integrity across all operations', () => {
-      fc.assert(fc.property(validatorGenerator, (validator) => {
-        if (validator.stakeAmount === 0) return true;
-        
-        const result = MultiTokenBridgeTestUtils.addValidator(
-          validator.chainId, accounts.wallet2, validator.stakeAmount, accounts.deployer
-        );
-        
-        if (result.result.type === 'ok') {
-          const retrieved = MultiTokenBridgeTestUtils.getValidatorInfo(validator.chainId, accounts.wallet2);
-          return retrieved.result.type === 'ok';
-        }
-        return true;
-      }), { numRuns: 100 });
-    });
-  });
-
-  describe('Property 4: Mathematical Accuracy', () => {
-    it('should maintain mathematical accuracy in fee calculations', () => {
-      fc.assert(fc.property(
-        fc.integer({ min: 1000, max: 1000000 }),
-        fc.integer({ min: 0, max: 1000 }),
-        (amount, feeRate) => {
-          MultiTokenBridgeTestUtils.configureBridge(1, true, 1000, 1000000, feeRate, 10, 2, accounts.deployer);
-          
-          const result = MultiTokenBridgeTestUtils.calculateBridgeFee(1, amount, 1);
-          if (result.result.type === 'ok') {
-            const data = result.result.value;
-            const expectedFee = Math.floor((amount * feeRate) / 10000);
-            const expectedBridge = amount - expectedFee;
-            
-            return Number(data['fee-amount'].value) === expectedFee &&
-                   Number(data['bridge-amount'].value) === expectedBridge &&
-                   Number(data['total-cost'].value) === amount;
+          if ((result.result as any).type === 'ok') {
+            const retrieved = MultiTokenBridgeTestUtils.getBridgeConfig(config.chainId);
+            expect(retrieved.result).toBeSome();
           }
           return true;
-        }
-      ), { numRuns: 100 });
+        }),
+        { numRuns: CFG.PROPERTY_TEST_RUNS },
+      );
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Property 2: Transaction state consistency
+  // -------------------------------------------------------------------------
+
+  describe('Property 2: Transaction State Consistency', () => {
+    it('should preserve transaction state after bridging tokens', () => {
+      MultiTokenBridgeTestUtils.setupDefaultBridgeConfig(deployer);
+
+      fc.assert(
+        fc.property(bridgeTransactionGenerator, tx => {
+          const result = MultiTokenBridgeTestUtils.bridgeTokens(
+            tx.tokenId,
+            tx.amount,
+            tx.destChain,
+            tx.destAddress,
+            tx.txId,
+            wallet1,
+          );
+
+          if ((result.result as any).type === 'ok') {
+            const retrieved = MultiTokenBridgeTestUtils.getBridgeTransaction(tx.txId);
+            // Transaction must be either found (some) or not found (none) – never an error
+            expect(['some', 'none']).toContain((retrieved.result as any).type);
+          }
+          return true;
+        }),
+        { numRuns: CFG.PROPERTY_TEST_RUNS },
+      );
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Property 3: Validator management integrity
+  // -------------------------------------------------------------------------
+
+  describe('Property 3: Validator Management Integrity', () => {
+    it('should make every registered validator retrievable', () => {
+      fc.assert(
+        fc.property(validatorGenerator, validator => {
+          if (validator.stakeAmount === 0) return true;
+
+          const result = MultiTokenBridgeTestUtils.addValidator(
+            validator.chainId,
+            wallet2,
+            validator.stakeAmount,
+            deployer,
+          );
+
+          if ((result.result as any).type === 'ok') {
+            const retrieved = MultiTokenBridgeTestUtils.getValidatorInfo(
+              validator.chainId,
+              wallet2,
+            );
+            expect((retrieved.result as any).type).toBe('ok');
+          }
+          return true;
+        }),
+        { numRuns: CFG.PROPERTY_TEST_RUNS },
+      );
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Property 4: Mathematical accuracy of fee calculations
+  // -------------------------------------------------------------------------
+
+  describe('Property 4: Mathematical Accuracy of Fee Calculations', () => {
+    it('should calculate fee-amount, bridge-amount, and total-cost correctly', () => {
+      fc.assert(
+        fc.property(
+          fc.integer({ min: CFG.MIN_BRIDGE_AMOUNT, max: CFG.MAX_BRIDGE_AMOUNT }),
+          fc.integer({ min: 0, max: CFG.MAX_BRIDGE_FEE }),
+          (amount, feeRate) => {
+            MultiTokenBridgeTestUtils.configureBridge(
+              CFG.TEST_CHAINS.ETHEREUM,
+              true,
+              CFG.MIN_BRIDGE_AMOUNT,
+              CFG.MAX_BRIDGE_AMOUNT,
+              feeRate,
+              10,
+              2,
+              deployer,
+            );
+
+            const result = MultiTokenBridgeTestUtils.calculateBridgeFee(
+              1,
+              amount,
+              CFG.TEST_CHAINS.ETHEREUM,
+            );
+
+            if ((result.result as any).type === 'ok') {
+              const data = (result.result as any).value;
+              const expectedFee = Math.floor((amount * feeRate) / 10_000);
+              const expectedBridge = amount - expectedFee;
+
+              expect(Number(data['fee-amount'].value)).toBe(expectedFee);
+              expect(Number(data['bridge-amount'].value)).toBe(expectedBridge);
+              expect(Number(data['total-cost'].value)).toBe(amount);
+            }
+            return true;
+          },
+        ),
+        { numRuns: CFG.PROPERTY_TEST_RUNS },
+      );
     });
   });
 });
