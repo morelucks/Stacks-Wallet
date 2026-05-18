@@ -1,61 +1,113 @@
-import { describe, it, expect } from 'vitest';
-import { MultiTokenBridgeTestUtils } from './multi-token-bridge-test-utils';
+/**
+ * Multi-Token Bridge Complete Transaction Tests
+ * Validates the full bridge-tokens → validate → complete lifecycle for the
+ * multi-token bridge on Stacks Network.
+ */
 
-const accounts = { deployer: 'ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM', wallet1: 'ST1SJ3DTE5DN7X54YDH5D64R3BCB6A2AG2ZQ8YPD5', wallet2: 'ST2CY5V39NHDPWSXMW9QDT3HC3GD6Q6XX4CFRK9AG' };
+import { describe, it, expect, beforeEach } from 'vitest';
+import { Cl } from '@stacks/transactions';
+import { MultiTokenBridgeTestUtils } from './multi-token-bridge-test-utils';
+import { MULTI_TOKEN_BRIDGE_TEST_CONFIG as CFG } from './multi-token-bridge-test-config';
+
+// ---------------------------------------------------------------------------
+// Test account setup
+// ---------------------------------------------------------------------------
+const accounts = simnet.getAccounts();
+const deployer = accounts.get('deployer')!;
+const wallet1 = accounts.get('wallet_1')!;
+const wallet2 = accounts.get('wallet_2')!;
+const wallet3 = accounts.get('wallet_3')!;
+
+// ---------------------------------------------------------------------------
+// Test suite
+// ---------------------------------------------------------------------------
 
 describe('Multi-Token Bridge Complete Transaction Tests', () => {
-  it('should complete bridge transaction successfully', () => {
-    MultiTokenBridgeTestUtils.setupDefaultBridgeConfig(accounts.deployer);
-    MultiTokenBridgeTestUtils.setupValidators([accounts.wallet2], accounts.deployer);
-    
-    const txId = MultiTokenBridgeTestUtils.generateTxId();
-    
-    // Bridge tokens
-    MultiTokenBridgeTestUtils.bridgeTokens(1, 10000, 1, 'addr', txId, accounts.wallet1);
-    
-    // Get enough signatures to meet threshold
-    MultiTokenBridgeTestUtils.validateBridgeTransaction(txId, MultiTokenBridgeTestUtils.generateSignature(), true, accounts.wallet2);
-    MultiTokenBridgeTestUtils.addValidator(1, 'ST3NBRSFKX28FQ2ZJ1MAKX58HKHSDGNV5N7R21XCP', 5000, accounts.deployer);
-    MultiTokenBridgeTestUtils.validateBridgeTransaction(txId, MultiTokenBridgeTestUtils.generateSignature(), true, 'ST3NBRSFKX28FQ2ZJ1MAKX58HKHSDGNV5N7R21XCP');
-    
-    // Complete transaction
-    const result = MultiTokenBridgeTestUtils.completeBridgeTransaction(txId, accounts.deployer);
-    expect(result.result).toBeOk();
-    
-    // Verify completion
-    const tx = MultiTokenBridgeTestUtils.getBridgeTransaction(txId);
-    expect(tx.result.value.value['status']).toBeAscii('completed');
+  beforeEach(() => {
+    MultiTokenBridgeTestUtils.setupDefaultBridgeConfig(deployer);
+    MultiTokenBridgeTestUtils.setupValidators([wallet2, wallet3], deployer);
   });
 
-  it('should reject completion without enough signatures', () => {
-    MultiTokenBridgeTestUtils.setupDefaultBridgeConfig(accounts.deployer);
-    MultiTokenBridgeTestUtils.setupValidators([accounts.wallet2], accounts.deployer);
-    
-    const txId = MultiTokenBridgeTestUtils.generateTxId();
-    MultiTokenBridgeTestUtils.bridgeTokens(1, 10000, 1, 'addr', txId, accounts.wallet1);
-    
-    // Only one signature (threshold is 2)
-    MultiTokenBridgeTestUtils.validateBridgeTransaction(txId, MultiTokenBridgeTestUtils.generateSignature(), true, accounts.wallet2);
-    
-    const result = MultiTokenBridgeTestUtils.completeBridgeTransaction(txId, accounts.deployer);
-    expect(result.result).toBeErr();
+  // -------------------------------------------------------------------------
+  // Successful completion
+  // -------------------------------------------------------------------------
+
+  describe('Successful completion', () => {
+    it('should complete a bridge transaction after meeting the validator threshold', () => {
+      const txId = MultiTokenBridgeTestUtils.generateTxId();
+
+      MultiTokenBridgeTestUtils.bridgeTokens(
+        1, 10_000, CFG.TEST_CHAINS.ETHEREUM, CFG.TEST_ADDRESSES.ETHEREUM, txId, wallet1,
+      );
+
+      const sig = MultiTokenBridgeTestUtils.generateSignature();
+      MultiTokenBridgeTestUtils.validateBridgeTransaction(txId, sig, true, wallet2);
+      MultiTokenBridgeTestUtils.validateBridgeTransaction(txId, sig, true, wallet3);
+
+      const result = MultiTokenBridgeTestUtils.completeBridgeTransaction(txId, deployer);
+      expect(result.result).toBeOk();
+
+      const tx = MultiTokenBridgeTestUtils.getBridgeTransaction(txId);
+      expect((tx.result as any).value?.value?.['status']).toBeAscii('completed');
+    });
+
+    it('should update bridge statistics after completion', () => {
+      const txId = MultiTokenBridgeTestUtils.generateTxId();
+
+      MultiTokenBridgeTestUtils.bridgeTokens(
+        1, 10_000, CFG.TEST_CHAINS.ETHEREUM, CFG.TEST_ADDRESSES.ETHEREUM, txId, wallet1,
+      );
+
+      const sig = MultiTokenBridgeTestUtils.generateSignature();
+      MultiTokenBridgeTestUtils.validateBridgeTransaction(txId, sig, true, wallet2);
+      MultiTokenBridgeTestUtils.validateBridgeTransaction(txId, sig, true, wallet3);
+      MultiTokenBridgeTestUtils.completeBridgeTransaction(txId, deployer);
+
+      const stats = MultiTokenBridgeTestUtils.getBridgeStats(CFG.TEST_CHAINS.ETHEREUM);
+      expect(stats.result).toBeSome();
+    });
   });
 
-  it('should update statistics on completion', () => {
-    MultiTokenBridgeTestUtils.setupDefaultBridgeConfig(accounts.deployer);
-    MultiTokenBridgeTestUtils.setupValidators([accounts.wallet2], accounts.deployer);
-    
-    const txId = MultiTokenBridgeTestUtils.generateTxId();
-    MultiTokenBridgeTestUtils.bridgeTokens(1, 10000, 1, 'addr', txId, accounts.wallet1);
-    
-    // Meet threshold
-    MultiTokenBridgeTestUtils.validateBridgeTransaction(txId, MultiTokenBridgeTestUtils.generateSignature(), true, accounts.wallet2);
-    MultiTokenBridgeTestUtils.addValidator(1, 'ST3NBRSFKX28FQ2ZJ1MAKX58HKHSDGNV5N7R21XCP', 5000, accounts.deployer);
-    MultiTokenBridgeTestUtils.validateBridgeTransaction(txId, MultiTokenBridgeTestUtils.generateSignature(), true, 'ST3NBRSFKX28FQ2ZJ1MAKX58HKHSDGNV5N7R21XCP');
-    
-    MultiTokenBridgeTestUtils.completeBridgeTransaction(txId, accounts.deployer);
-    
-    const stats = MultiTokenBridgeTestUtils.getBridgeStats(1);
-    expect(stats.result.value).toBeSome();
+  // -------------------------------------------------------------------------
+  // Insufficient signatures
+  // -------------------------------------------------------------------------
+
+  describe('Insufficient signatures', () => {
+    it('should reject completion when below the validator threshold', () => {
+      const txId = MultiTokenBridgeTestUtils.generateTxId();
+
+      MultiTokenBridgeTestUtils.bridgeTokens(
+        1, 10_000, CFG.TEST_CHAINS.ETHEREUM, CFG.TEST_ADDRESSES.ETHEREUM, txId, wallet1,
+      );
+
+      // Only one signature – threshold is 2
+      MultiTokenBridgeTestUtils.validateBridgeTransaction(
+        txId, MultiTokenBridgeTestUtils.generateSignature(), true, wallet2,
+      );
+
+      const result = MultiTokenBridgeTestUtils.completeBridgeTransaction(txId, deployer);
+      expect(result.result).toBeErr();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Non-owner completion
+  // -------------------------------------------------------------------------
+
+  describe('Access control', () => {
+    it('should reject completion from a non-owner', () => {
+      const txId = MultiTokenBridgeTestUtils.generateTxId();
+
+      MultiTokenBridgeTestUtils.bridgeTokens(
+        1, 10_000, CFG.TEST_CHAINS.ETHEREUM, CFG.TEST_ADDRESSES.ETHEREUM, txId, wallet1,
+      );
+
+      const sig = MultiTokenBridgeTestUtils.generateSignature();
+      MultiTokenBridgeTestUtils.validateBridgeTransaction(txId, sig, true, wallet2);
+      MultiTokenBridgeTestUtils.validateBridgeTransaction(txId, sig, true, wallet3);
+
+      const result = MultiTokenBridgeTestUtils.completeBridgeTransaction(txId, wallet1);
+      expect(result.result).toBeErr(Cl.uint(CFG.ERRORS.UNAUTHORIZED));
+    });
   });
 });
