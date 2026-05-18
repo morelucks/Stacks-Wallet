@@ -17,9 +17,9 @@ export class BridgeTestUtils {
   /** Default chain fee and confirmation configuration */
   static readonly DEFAULT_CHAINS: Record<string, { fee: number; confirmations: number }> = {
     ethereum: { fee: 1_000_000, confirmations: 12 },
-    polygon: { fee: 500_000, confirmations: 20 },
-    arbitrum: { fee: 750_000, confirmations: 8 },
-    optimism: { fee: 600_000, confirmations: 10 },
+    polygon:  { fee:   500_000, confirmations: 20 },
+    arbitrum: { fee:   750_000, confirmations:  8 },
+    optimism: { fee:   600_000, confirmations: 10 },
   };
 
   // -------------------------------------------------------------------------
@@ -254,8 +254,8 @@ export class BridgeTestUtils {
   ) {
     const clarityRequests = requests.map(req =>
       Cl.tuple({
-        'token-id': Cl.uint(req.tokenId),
-        'target-chain': Cl.stringAscii(req.targetChain),
+        'token-id':       Cl.uint(req.tokenId),
+        'target-chain':   Cl.stringAscii(req.targetChain),
         'target-address': Cl.stringAscii(req.targetAddress),
       }),
     );
