@@ -1,55 +1,66 @@
 /**
  * NFT Test Configuration
+ * Centralised constants for SIP-009 NFT contract tests on Stacks Network
+ *
+ * @module nft-test-config
  */
 
 export const NFT_TEST_CONFIG = {
+  // -------------------------------------------------------------------------
   // Test execution settings
-  timeout: 30000,
+  // -------------------------------------------------------------------------
+  /** Maximum milliseconds allowed per test */
+  timeout: 30_000,
+  /** Number of retry attempts for flaky tests */
   retries: 3,
-  
-  // Property test settings
+
+  // -------------------------------------------------------------------------
+  // Property-based test settings
+  // -------------------------------------------------------------------------
+  /** Number of random inputs generated per property test */
   propertyIterations: 100,
-  
-  // Test data limits
+
+  // -------------------------------------------------------------------------
+  // Data limits
+  // -------------------------------------------------------------------------
+  /** Maximum number of tokens minted in a single test scenario */
   maxTokens: 50,
+  /** Maximum number of distinct principals used in a test scenario */
   maxPrincipals: 10,
+  /** Maximum number of sequential operations in a scenario */
   maxOperations: 20,
+  /** Maximum depth of an ownership-transfer chain */
   maxChainLength: 5,
-  
-  // Error codes
+
+  // -------------------------------------------------------------------------
+  // SIP-009 error codes (must match nft-contract.clar)
+  // -------------------------------------------------------------------------
   errorCodes: {
+    /** Caller is not the contract owner */
     ERR_OWNER_ONLY: 100,
+    /** Caller does not own the token being transferred */
     ERR_NOT_TOKEN_OWNER: 101,
+    /** Token with this ID already exists */
     ERR_TOKEN_EXISTS: 102,
-    ERR_TOKEN_NOT_FOUND: 103
+    /** Token with this ID does not exist */
+    ERR_TOKEN_NOT_FOUND: 103,
   },
-  
-  // Test accounts
+
+  // -------------------------------------------------------------------------
+  // Stacks Network simnet test accounts
+  // -------------------------------------------------------------------------
   accounts: {
+    /** Contract deployer / owner */
     deployer: 'deployer',
+    /** Primary test user */
     user1: 'wallet_1',
+    /** Secondary test user */
     user2: 'wallet_2',
-    user3: 'wallet_3'
-  }
+    /** Tertiary test user */
+    user3: 'wallet_3',
+    /** Additional test user */
+    user4: 'wallet_4',
+  },
 } as const;
 
-/**
- * Test data validation
- */
-export function validateTestConfig() {
-  const config = NFT_TEST_CONFIG;
-  
-  if (config.maxTokens <= 0) {
-    throw new Error('maxTokens must be positive');
-  }
-  
-  if (config.maxPrincipals <= 0) {
-    throw new Error('maxPrincipals must be positive');
-  }
-  
-  if (config.propertyIterations <= 0) {
-    throw new Error('propertyIterations must be positive');
-  }
-  
-  return true;
-}
+export type NFTErrorCode = (typeof NFT_TEST_CONFIG.errorCodes)[keyof typeof NFT_TEST_CONFIG.errorCodes];
