@@ -26,6 +26,11 @@ export function str(value: string) {
   return Cl.stringUtf8(value);
 }
 
+/** Wrap a string as a Clarity ASCII string */
+export function ascii(value: string) {
+  return Cl.stringAscii(value);
+}
+
 /** Wrap a string or Buffer as a Clarity buffer */
 export function buffer(value: string | Buffer) {
   if (typeof value === 'string') {
@@ -42,6 +47,11 @@ export function some(value: unknown) {
 /** Return a Clarity None value */
 export function none() {
   return Cl.none();
+}
+
+/** Wrap a boolean as a Clarity bool */
+export function bool(value: boolean) {
+  return Cl.bool(value);
 }
 
 // ---------------------------------------------------------------------------
@@ -192,9 +202,9 @@ export interface NFTTestData {
 
 /** Canonical NFT error codes matching the SIP-009 contract on Stacks Network */
 export const NFT_ERROR_CODES = {
-  ERR_OWNER_ONLY: 100,
+  ERR_OWNER_ONLY:     100,
   ERR_NOT_TOKEN_OWNER: 101,
-  ERR_TOKEN_EXISTS: 102,
+  ERR_TOKEN_EXISTS:   102,
   ERR_TOKEN_NOT_FOUND: 103,
 } as const;
 
