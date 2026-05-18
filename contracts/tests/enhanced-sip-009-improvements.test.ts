@@ -1,21 +1,17 @@
-import { describe, expect, it, beforeEach } from "vitest";
-import { Cl } from "@stacks/transactions";
+/**
+ * Enhanced SIP-009 Improvements Test Suite
+ * Tests for gas optimisation, dynamic metadata evolution, advanced trading,
+ * security audit features, and analytics for the enhanced SIP-009 NFT
+ * contract on Stacks Network.
+ */
+
+import { describe, expect, it, beforeEach } from 'vitest';
+import { Cl } from '@stacks/transactions';
 
 const accounts = simnet.getAccounts();
-const deployer = accounts.get("deployer")!;
-const alice = accounts.get("wallet_1")!;
-const bob = accounts.get("wallet_2")!;
-
-/*
-  Enhanced SIP-009 Improvements Test Suite
-  
-  Tests for the new improvements including:
-  - Gas optimization features
-  - Dynamic metadata evolution
-  - Advanced trading mechanisms
-  - Security audit features
-  - Analytics engine
-*/
+const deployer = accounts.get('deployer')!;
+const alice = accounts.get('wallet_1')!;
+const bob = accounts.get('wallet_2')!;
 
 describe("Enhanced SIP-009 Improvements", () => {
   beforeEach(() => {

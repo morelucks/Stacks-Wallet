@@ -1,26 +1,27 @@
-import { describe, expect, it, beforeEach } from "vitest";
-import { Cl } from "@stacks/transactions";
+/**
+ * Enhanced SIP-009 NFT Contract Test Suite
+ * Comprehensive tests for the enhanced SIP-009 implementation on Stacks Network.
+ *
+ * Covers:
+ *  - Basic SIP-009 compliance
+ *  - Enhanced metadata system
+ *  - Batch operations
+ *  - Marketplace functionality
+ *  - Staking system
+ *  - Governance features
+ *  - Collection management
+ *  - Analytics integration
+ *  - Cross-chain bridge
+ */
+
+import { describe, expect, it, beforeEach } from 'vitest';
+import { Cl } from '@stacks/transactions';
 
 const accounts = simnet.getAccounts();
-const deployer = accounts.get("deployer")!;
-const alice = accounts.get("wallet_1")!;
-const bob = accounts.get("wallet_2")!;
-const charlie = accounts.get("wallet_3")!;
-
-/*
-  Enhanced SIP-009 NFT Contract Test Suite
-  
-  Comprehensive tests for the enhanced SIP-009 implementation covering:
-  - Basic SIP-009 compliance
-  - Enhanced metadata system
-  - Batch operations
-  - Marketplace functionality
-  - Staking system
-  - Governance features
-  - Collection management
-  - Analytics integration
-  - Cross-chain bridge
-*/
+const deployer = accounts.get('deployer')!;
+const alice = accounts.get('wallet_1')!;
+const bob = accounts.get('wallet_2')!;
+const charlie = accounts.get('wallet_3')!;
 
 describe("Enhanced SIP-009 NFT Contract", () => {
   beforeEach(() => {
