@@ -1,6 +1,14 @@
 /**
  * Wallet-X Contract Tests
- * Tests for multi-signature wallet with admin/member roles
+ * Tests for the multi-signature wallet with admin/member roles on Stacks Network.
+ *
+ * Error codes:
+ *  100 – ERR_NOT_ADMIN
+ *  101 – ERR_WALLET_EXISTS
+ *  102 – ERR_INSUFFICIENT_FUNDS
+ *  103 – ERR_MEMBER_NOT_ACTIVE
+ *  104 – ERR_MEMBER_FROZEN
+ *  105 – ERR_INSUFFICIENT_SPEND_LIMIT
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
@@ -10,11 +18,9 @@ import {
   principal,
   uint,
   str,
-  assertOk,
-  assertErr,
   expectEqual,
   formatTokenAmount,
-  DEFAULT_WALLET_DATA
+  DEFAULT_WALLET_DATA,
 } from './helpers';
 
 describe('Wallet-X Contract - Wallet Registration', () => {
