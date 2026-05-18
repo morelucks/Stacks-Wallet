@@ -1,6 +1,20 @@
 /**
  * NFT Contract Tests
- * Tests for SIP-009 compliant NFT contract
+ * Comprehensive tests for the SIP-009 compliant NFT contract on Stacks Network
+ *
+ * Test groups:
+ *  1. Setup
+ *  2. Minting Operations
+ *  3. Minting Access Control
+ *  4. Transfer Operations
+ *  5. Transfer Access Control
+ *  6. Ownership Queries
+ *  7. Token ID Tracking
+ *  8. Token URI
+ *  9. Error Handling
+ * 10. Edge Cases and Boundaries
+ * 11. Integration Tests
+ * 12. Performance and Reliability
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
@@ -9,15 +23,12 @@ import { Cl } from '@stacks/transactions';
 import {
   principal,
   uint,
-  str,
-  buffer,
   some,
   none,
-  assertOk,
-  assertErr,
-  getValue,
-  expectEqual
+  expectEqual,
+  NFT_ERROR_CODES,
 } from './helpers';
+import { NFT_TEST_CONFIG } from './nft-test-config';
 
 describe('NFT Contract - Test Setup', () => {
   let deployer: string;
