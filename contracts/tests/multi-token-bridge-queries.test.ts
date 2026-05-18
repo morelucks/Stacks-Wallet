@@ -4,6 +4,9 @@
  * Stacks Network: get-bridge-config, get-bridge-transaction,
  * get-validator-info, get-bridge-stats, calculate-bridge-fee,
  * and get-bridge-overview.
+ *
+ * All query functions are read-only and should never throw; they return
+ * Ok(some(...)) for found data and Ok(none()) for missing data.
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
