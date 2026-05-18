@@ -1,11 +1,21 @@
 /**
  * ERC-712 Contract Tests
  * Tests for ERC-712 style structured data hashing and signature verification
+ * on Stacks Network.
+ *
+ * Error codes:
+ *  401 – ERR_UNAUTHORIZED
+ *  402 – ERR_INVALID_SIGNATURE
+ *  403 – ERR_EXPIRED
+ *  404 – ERR_ALREADY_USED
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import { simnet } from '@stacks/clarinet-sdk';
 import { Cl } from '@stacks/transactions';
+
+/** Zero-filled 65-byte mock signature (always invalid) */
+const ZERO_SIG = Cl.bufferFromHex('0x' + '00'.repeat(65));
 
 describe('ERC-712 Contract Tests', () => {
   let deployer: string;
