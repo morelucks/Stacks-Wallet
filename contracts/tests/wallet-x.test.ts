@@ -35,64 +35,38 @@ describe('Wallet-X Contract - Wallet Registration', () => {
     admin2 = accounts.get('wallet_2')!;
   });
 
-  it('should register a new wallet', () => {
-    const walletName = 'Test Wallet';
-    const fundAmount = formatTokenAmount(1000);
-
+  it('should register a new wallet successfully', () => {
     const result = simnet.callPublicFn(
       'wallet-x',
       'register-wallet',
-      [str(walletName), uint(fundAmount), principal(deployer)],
-      admin1
+      [str('Test Wallet'), uint(formatTokenAmount(1_000)), principal(deployer)],
+      admin1,
     );
-
     expect(result.isOk()).toBe(true);
   });
 
   it('should prevent duplicate wallet registration', () => {
-    const walletName = 'Test Wallet';
-    const fundAmount = formatTokenAmount(1000);
+    const args = [str('Test Wallet'), uint(formatTokenAmount(1_000)), principal(deployer)];
 
-    // First registration
-    simnet.callPublicFn(
-      'wallet-x',
-      'register-wallet',
-      [str(walletName), uint(fundAmount), principal(deployer)],
-      admin1
-    );
+    simnet.callPublicFn('wallet-x', 'register-wallet', args, admin1);
 
-    // Second registration should fail
-    const result = simnet.callPublicFn(
-      'wallet-x',
-      'register-wallet',
-      [str(walletName), uint(fundAmount), principal(deployer)],
-      admin1
-    );
-
+    const result = simnet.callPublicFn('wallet-x', 'register-wallet', args, admin1);
     expect(result.isErr()).toBe(true);
-    // Should return ERR_WALLET_EXISTS (u101)
-    expectEqual(result.value, Cl.error(Cl.uint(101)));
+    expectEqual(result.value, Cl.error(Cl.uint(101))); // ERR_WALLET_EXISTS
   });
 
-  it('should allow multiple admins to register wallets', () => {
-    const fundAmount = formatTokenAmount(1000);
+  it('should allow multiple admins to register separate wallets', () => {
+    const fund = uint(formatTokenAmount(1_000));
 
-    const result1 = simnet.callPublicFn(
-      'wallet-x',
-      'register-wallet',
-      [str('Wallet 1'), uint(fundAmount), principal(deployer)],
-      admin1
+    const r1 = simnet.callPublicFn(
+      'wallet-x', 'register-wallet', [str('Wallet 1'), fund, principal(deployer)], admin1,
+    );
+    const r2 = simnet.callPublicFn(
+      'wallet-x', 'register-wallet', [str('Wallet 2'), fund, principal(deployer)], admin2,
     );
 
-    const result2 = simnet.callPublicFn(
-      'wallet-x',
-      'register-wallet',
-      [str('Wallet 2'), uint(fundAmount), principal(deployer)],
-      admin2
-    );
-
-    expect(result1.isOk()).toBe(true);
-    expect(result2.isOk()).toBe(true);
+    expect(r1.isOk()).toBe(true);
+    expect(r2.isOk()).toBe(true);
   });
 });
 
