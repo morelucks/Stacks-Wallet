@@ -2,6 +2,12 @@
  * Bridge Fee System Tests
  * Validates fee calculation, discount application, and batch fee totals
  * for the SIP-009 cross-chain bridge on Stacks Network.
+ *
+ * Fee structure (micro-STX):
+ *  - Ethereum: 1 000 000
+ *  - Polygon:    500 000
+ *  - Arbitrum:   750 000
+ *  - Optimism:   600 000
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
