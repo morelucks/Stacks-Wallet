@@ -2,6 +2,9 @@
  * Multi-Token Bridge Final Integration Tests
  * Comprehensive end-to-end system tests verifying that all bridge components
  * work together correctly on Stacks Network.
+ *
+ * These tests exercise the complete bridge lifecycle:
+ *  bridge-tokens → validate-bridge-transaction → complete-bridge-transaction
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
