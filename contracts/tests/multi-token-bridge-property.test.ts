@@ -4,10 +4,10 @@
  * bridge on Stacks Network.
  *
  * Properties tested:
- *  1. Bridge configuration integrity
- *  2. Transaction state consistency
- *  3. Validator management integrity
- *  4. Mathematical accuracy of fee calculations
+ *  1. Bridge configuration integrity – every valid config is stored and retrievable
+ *  2. Transaction state consistency – bridged tokens produce retrievable state
+ *  3. Validator management integrity – every registered validator is retrievable
+ *  4. Mathematical accuracy – fee-amount + bridge-amount = total-cost for all inputs
  */
 
 import { describe, it, expect } from 'vitest';
